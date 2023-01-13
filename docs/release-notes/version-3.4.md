@@ -12,11 +12,18 @@
 
 ### Bug Fixes
 
+* [#10201](https://github.com/netbox-community/netbox/issues/10201) - Fix AssertionError exception when removing some terminations from an existing cable
 * [#11210](https://github.com/netbox-community/netbox/issues/11210) - Fix ValueError exception when attempting to bulk import cables attached to occupied terminations
 * [#11340](https://github.com/netbox-community/netbox/issues/11340) - Avoid flagging cable termination changes erroneously
 * [#11379](https://github.com/netbox-community/netbox/issues/11379) - Fix TypeError exception when bulk editing custom date fields
 * [#11384](https://github.com/netbox-community/netbox/issues/11384) - Correct current time display on script & report forms
+* [#11402](https://github.com/netbox-community/netbox/issues/11402) - Avoid LookupError exception when running scripts with commit disabled
 * [#11403](https://github.com/netbox-community/netbox/issues/11403) - Fix exception when scheduling a job in the past
+* [#11416](https://github.com/netbox-community/netbox/issues/11416) - Avoid AttributeError exception when deleting a cabled circuit termination
+* [#11438](https://github.com/netbox-community/netbox/issues/11438) - Fix deletion of scheduled job using non-default queues
+* [#11444](https://github.com/netbox-community/netbox/issues/11444) - Adding/removing a device from a device bay should record a pre-change snapshot on the device bay
+* [#11467](https://github.com/netbox-community/netbox/issues/11467) - Correct count on interfaces tab when viewing a VC master device
+* [#11483](https://github.com/netbox-community/netbox/issues/11483) - Apply configured formatting to custom date fields
 
 ---
 
