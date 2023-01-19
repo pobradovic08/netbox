@@ -62,6 +62,10 @@ django-timezone-field
 # https://github.com/encode/django-rest-framework
 djangorestframework
 
+# Sane and flexible OpenAPI 3 schema generation for Django REST framework.
+# https://github.com/tfranzel/drf-spectacular
+drf-spectacular
+
 # Django wrapper for Graphene (GraphQL support)
 # https://github.com/graphql-python/graphene-django
 graphene_django

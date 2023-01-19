@@ -3,6 +3,7 @@ from django.conf.urls import include
 from django.urls import path, re_path
 from django.views.decorators.csrf import csrf_exempt
 from django.views.static import serve
+from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
 
 from extras.plugins.urls import plugin_admin_patterns, plugin_patterns, plugin_api_patterns
 from netbox.api.views import APIRootView, StatusView
@@ -45,6 +46,11 @@ _patterns = [
     path('api/virtualization/', include('virtualization.api.urls')),
     path('api/wireless/', include('wireless.api.urls')),
     path('api/status/', StatusView.as_view(), name='api-status'),
+
+    path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
+    # Optional UI:
+    path('api/schema/swagger-ui/', SpectacularSwaggerView.as_view(url_name='schema'), name='swagger-ui'),
+    path('api/schema/redoc/', SpectacularRedocView.as_view(url_name='schema'), name='redoc'),
 
     # GraphQL
     path('graphql/', csrf_exempt(GraphQLView.as_view(graphiql=True, schema=schema)), name='graphql'),

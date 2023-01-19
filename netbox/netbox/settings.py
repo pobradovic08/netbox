@@ -341,6 +341,7 @@ INSTALLED_APPS = [
     'virtualization',
     'wireless',
     'django_rq',  # Must come after extras to allow overriding management commands
+    'drf_spectacular',
 ]
 
 # Middleware
@@ -565,6 +566,7 @@ REST_FRAMEWORK = {
         'bulk_destroy': 'bulk_delete',
     },
     'VIEW_NAME_FUNCTION': 'utilities.api.get_view_name',
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
 }
 
 
