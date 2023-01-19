@@ -50,6 +50,15 @@ class IPAMQuery(graphene.ObjectType):
     vlan = ObjectField(VLANType)
     vlan_list = ObjectListField(VLANType)
 
+    def resolve_vlan_list(root, info):
+        print("--- resole_vlan_list ---")
+        from utilities.graphql_optimizer import gql_query_optimizer
+        from ipam.models import VLAN
+        # qs = VLAN.objects.all()
+        qs = gql_query_optimizer(VLAN.objects.all(), info)
+        print("--- after resolve_vlan_list")
+        return qs
+
     vlan_group = ObjectField(VLANGroupType)
     vlan_group_list = ObjectListField(VLANGroupType)
 

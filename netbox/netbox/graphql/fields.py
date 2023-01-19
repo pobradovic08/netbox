@@ -2,6 +2,8 @@ from functools import partial
 
 import graphene
 from graphene_django import DjangoListField
+# import graphene_django_optimizer as gql_optimizer
+from utilities.graphql_optimizer import gql_query_optimizer
 
 from .utils import get_graphene_type
 
@@ -54,12 +56,21 @@ class ObjectListField(DjangoListField):
 
     @staticmethod
     def list_resolver(django_object_type, resolver, default_manager, root, info, **args):
+        # print(f"django_object_type: {django_object_type} resolver: {resolver} default_manager: {default_manager} root: {root} info: {info}")
         queryset = super(ObjectListField, ObjectListField).list_resolver(django_object_type, resolver, default_manager, root, info, **args)
 
         # Instantiate and apply the FilterSet, if defined
         filterset_class = django_object_type._meta.filterset_class
         if filterset_class:
             filterset = filterset_class(data=args, queryset=queryset, request=info.context)
-            return filterset.qs
+            queryset = filterset.qs
 
+        # return queryset
+        # return gql_optimizer.query(queryset, info)
+        # print(f"queryset: {queryset}")
+        # qs = queryset
+        # return queryset.prefetch_related("tenant", "prefixes", "prefixes__tenant", "prefixes__vlan", )
         return queryset
+        qs = gql_query_optimizer(queryset, info)
+
+        return qs
