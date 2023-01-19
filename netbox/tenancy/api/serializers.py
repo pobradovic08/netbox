@@ -1,5 +1,4 @@
 from django.contrib.auth.models import ContentType
-from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from netbox.api.fields import ChoiceField, ContentTypeField
@@ -107,7 +106,6 @@ class ContactAssignmentSerializer(NetBoxModelSerializer):
             'last_updated',
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_object(self, instance):
         serializer = get_serializer_for_model(instance.content_type.model_class(), prefix=NESTED_SERIALIZER_PREFIX)
         context = {'request': self.context['request']}

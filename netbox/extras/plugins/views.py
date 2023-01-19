@@ -29,7 +29,6 @@ class InstalledPluginsAPIView(APIView):
     permission_classes = [permissions.IsAdminUser]
     _ignore_model_permissions = True
     exclude_from_schema = True
-    swagger_schema = None
 
     def get_view_name(self):
         return "Installed Plugins"
@@ -52,7 +51,6 @@ class InstalledPluginsAPIView(APIView):
 class PluginsAPIRootView(APIView):
     _ignore_model_permissions = True
     exclude_from_schema = True
-    swagger_schema = None
 
     def get_view_name(self):
         return "Plugins"

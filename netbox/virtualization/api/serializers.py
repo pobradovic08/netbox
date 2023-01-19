@@ -1,4 +1,3 @@
-from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from dcim.api.nested_serializers import (
@@ -100,7 +99,6 @@ class VirtualMachineWithConfigContextSerializer(VirtualMachineSerializer):
             'tags', 'custom_fields', 'config_context', 'created', 'last_updated',
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_config_context(self, obj):
         return obj.get_config_context()
 

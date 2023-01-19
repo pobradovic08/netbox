@@ -2,7 +2,6 @@ import decimal
 
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext as _
-from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 from timezone_field.rest_framework import TimeZoneSerializerField
 
@@ -50,7 +49,6 @@ class CabledObjectSerializer(serializers.ModelSerializer):
 
         return None
 
-    @swagger_serializer_method(serializer_or_field=serializers.ListField)
     def get_link_peers(self, obj):
         """
         Return the appropriate serializer for the link termination model.
@@ -63,7 +61,6 @@ class CabledObjectSerializer(serializers.ModelSerializer):
         context = {'request': self.context['request']}
         return serializer(obj.link_peers, context=context, many=True).data
 
-    @swagger_serializer_method(serializer_or_field=serializers.BooleanField)
     def get__occupied(self, obj):
         return obj._occupied
 
@@ -80,7 +77,6 @@ class ConnectedEndpointsSerializer(serializers.ModelSerializer):
         if endpoints := obj.connected_endpoints:
             return f'{endpoints[0]._meta.app_label}.{endpoints[0]._meta.model_name}'
 
-    @swagger_serializer_method(serializer_or_field=serializers.ListField)
     def get_connected_endpoints(self, obj):
         """
         Return the appropriate serializer for the type of connected object.
@@ -90,7 +86,6 @@ class ConnectedEndpointsSerializer(serializers.ModelSerializer):
             context = {'request': self.context['request']}
             return serializer(endpoints, many=True, context=context).data
 
-    @swagger_serializer_method(serializer_or_field=serializers.BooleanField)
     def get_connected_endpoints_reachable(self, obj):
         return obj._path and obj._path.is_complete and obj._path.is_active
 
@@ -583,7 +578,6 @@ class InventoryItemTemplateSerializer(ValidatedModelSerializer):
             'description', 'component_type', 'component_id', 'component', 'created', 'last_updated', '_depth',
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_component(self, obj):
         if obj.component is None:
             return None
@@ -660,7 +654,6 @@ class DeviceSerializer(NetBoxModelSerializer):
             'comments', 'local_context_data', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
 
-    @swagger_serializer_method(serializer_or_field=NestedDeviceSerializer)
     def get_parent_device(self, obj):
         try:
             device_bay = obj.parent_bay
@@ -717,7 +710,6 @@ class DeviceWithConfigContextSerializer(DeviceSerializer):
             'local_context_data', 'tags', 'custom_fields', 'config_context', 'created', 'last_updated',
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_config_context(self, obj):
         return obj.get_config_context()
 
@@ -1005,7 +997,6 @@ class InventoryItemSerializer(NetBoxModelSerializer):
             'custom_fields', 'created', 'last_updated', '_depth',
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_component(self, obj):
         if obj.component is None:
             return None
@@ -1076,7 +1067,6 @@ class CableTerminationSerializer(NetBoxModelSerializer):
             'id', 'url', 'display', 'cable', 'cable_end', 'termination_type', 'termination_id', 'termination'
         ]
 
-    @swagger_serializer_method(serializer_or_field=serializers.JSONField)
     def get_termination(self, obj):
         serializer = get_serializer_for_model(obj.termination, prefix=NESTED_SERIALIZER_PREFIX)
         context = {'request': self.context['request']}
@@ -1090,7 +1080,6 @@ class CablePathSerializer(serializers.ModelSerializer):
         model = CablePath
         fields = ['id', 'path', 'is_active', 'is_complete', 'is_split']
 
-    @swagger_serializer_method(serializer_or_field=serializers.ListField)
     def get_path(self, obj):
         ret = []
         for nodes in obj.path_objects:

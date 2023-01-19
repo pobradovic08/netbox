@@ -2,9 +2,6 @@ import socket
 
 from django.http import Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404
-from drf_yasg import openapi
-from drf_yasg.openapi import Parameter
-from drf_yasg.utils import swagger_auto_schema
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
@@ -194,10 +191,6 @@ class RackViewSet(NetBoxModelViewSet):
     serializer_class = serializers.RackSerializer
     filterset_class = filtersets.RackFilterSet
 
-    @swagger_auto_schema(
-        responses={200: serializers.RackUnitSerializer(many=True)},
-        query_serializer=serializers.RackElevationDetailFilterSerializer
-    )
     @action(detail=True)
     def elevation(self, request, pk=None):
         """
@@ -419,17 +412,6 @@ class DeviceViewSet(ConfigContextQuerySetMixin, NetBoxModelViewSet):
 
         return serializers.DeviceWithConfigContextSerializer
 
-    @swagger_auto_schema(
-        manual_parameters=[
-            Parameter(
-                name='method',
-                in_='query',
-                required=True,
-                type=openapi.TYPE_STRING
-            )
-        ],
-        responses={'200': serializers.DeviceNAPALMSerializer}
-    )
     @action(detail=True, url_path='napalm')
     def napalm(self, request, pk):
         """
@@ -727,32 +709,30 @@ class ConnectedDeviceViewSet(ViewSet):
     * `peer_interface`: The name of the peer interface
     """
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
-    _device_param = Parameter(
-        name='peer_device',
-        in_='query',
-        description='The name of the peer device',
-        required=True,
-        type=openapi.TYPE_STRING
-    )
-    _interface_param = Parameter(
-        name='peer_interface',
-        in_='query',
-        description='The name of the peer interface',
-        required=True,
-        type=openapi.TYPE_STRING
-    )
+    # _device_param = Parameter(
+    #     name='peer_device',
+    #     in_='query',
+    #     description='The name of the peer device',
+    #     required=True,
+    #     type=openapi.TYPE_STRING
+    # )
+    # _interface_param = Parameter(
+    #     name='peer_interface',
+    #     in_='query',
+    #     description='The name of the peer interface',
+    #     required=True,
+    #     type=openapi.TYPE_STRING
+    # )
 
     def get_view_name(self):
         return "Connected Device Locator"
 
-    @swagger_auto_schema(
-        manual_parameters=[_device_param, _interface_param],
-        responses={'200': serializers.DeviceSerializer}
-    )
     def list(self, request):
 
-        peer_device_name = request.query_params.get(self._device_param.name)
-        peer_interface_name = request.query_params.get(self._interface_param.name)
+        # peer_device_name = request.query_params.get(self._device_param.name)
+        # peer_interface_name = request.query_params.get(self._interface_param.name)
+        peer_device_name = request.query_params.get('peer_device')
+        peer_interface_name = request.query_params.get('peer_interface')
 
         if not peer_device_name or not peer_interface_name:
             raise MissingFilterException(detail='Request must include "peer_device" and "peer_interface" filters.')

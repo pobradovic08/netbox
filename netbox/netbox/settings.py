@@ -341,7 +341,6 @@ INSTALLED_APPS = [
     'virtualization',
     'wireless',
     'django_rq',  # Must come after extras to allow overriding management commands
-    'drf_yasg',
 ]
 
 # Middleware
@@ -577,49 +576,6 @@ GRAPHENE = {
     # Avoids naming collision on models with 'type' field; see
     # https://github.com/graphql-python/graphene-django/issues/185
     'DJANGO_CHOICE_FIELD_ENUM_V3_NAMING': True,
-}
-
-
-#
-# drf_yasg (OpenAPI/Swagger)
-#
-
-SWAGGER_SETTINGS = {
-    'DEFAULT_AUTO_SCHEMA_CLASS': 'utilities.custom_inspectors.NetBoxSwaggerAutoSchema',
-    'DEFAULT_FIELD_INSPECTORS': [
-        'utilities.custom_inspectors.CustomFieldsDataFieldInspector',
-        'utilities.custom_inspectors.NullableBooleanFieldInspector',
-        'utilities.custom_inspectors.ChoiceFieldInspector',
-        'utilities.custom_inspectors.SerializedPKRelatedFieldInspector',
-        'drf_yasg.inspectors.CamelCaseJSONFilter',
-        'drf_yasg.inspectors.ReferencingSerializerInspector',
-        'drf_yasg.inspectors.RelatedFieldInspector',
-        'drf_yasg.inspectors.ChoiceFieldInspector',
-        'drf_yasg.inspectors.FileFieldInspector',
-        'drf_yasg.inspectors.DictFieldInspector',
-        'drf_yasg.inspectors.JSONFieldInspector',
-        'drf_yasg.inspectors.SerializerMethodFieldInspector',
-        'drf_yasg.inspectors.SimpleFieldInspector',
-        'drf_yasg.inspectors.StringDefaultFieldInspector',
-    ],
-    'DEFAULT_FILTER_INSPECTORS': [
-        'drf_yasg.inspectors.CoreAPICompatInspector',
-    ],
-    'DEFAULT_INFO': 'netbox.urls.openapi_info',
-    'DEFAULT_MODEL_DEPTH': 1,
-    'DEFAULT_PAGINATOR_INSPECTORS': [
-        'utilities.custom_inspectors.NullablePaginatorInspector',
-        'drf_yasg.inspectors.DjangoRestResponsePagination',
-        'drf_yasg.inspectors.CoreAPICompatInspector',
-    ],
-    'SECURITY_DEFINITIONS': {
-        'Bearer': {
-            'type': 'apiKey',
-            'name': 'Authorization',
-            'in': 'header',
-        }
-    },
-    'VALIDATOR_URL': None,
 }
 
 

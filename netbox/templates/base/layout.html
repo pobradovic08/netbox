@@ -132,9 +132,11 @@ Blocks:
                     </a>
 
                     {# API docs #}
+                    {% comment %}
                     <a type="button" class="nav-link" href="{% url 'api_docs' %}" target="_blank">
                       <i title="REST API documentation" class="mdi mdi-book text-primary" data-bs-placement="top" data-bs-toggle="tooltip"></i>
                     </a>
+                    {% endcomment %}
 
                     {# GraphQL API #}
                     {% if config.GRAPHQL_ENABLED %}

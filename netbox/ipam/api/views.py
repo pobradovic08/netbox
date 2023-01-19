@@ -2,7 +2,6 @@ from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django_pglocks import advisory_lock
-from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
@@ -204,7 +203,6 @@ def get_results_limit(request):
 class AvailablePrefixesView(ObjectValidationMixin, APIView):
     queryset = Prefix.objects.all()
 
-    @swagger_auto_schema(responses={200: serializers.AvailablePrefixSerializer(many=True)})
     def get(self, request, pk):
         prefix = get_object_or_404(Prefix.objects.restrict(request.user), pk=pk)
         available_prefixes = prefix.get_available_prefixes()
@@ -216,10 +214,6 @@ class AvailablePrefixesView(ObjectValidationMixin, APIView):
 
         return Response(serializer.data)
 
-    @swagger_auto_schema(
-        request_body=serializers.PrefixLengthSerializer,
-        responses={201: serializers.PrefixSerializer(many=True)}
-    )
     @advisory_lock(ADVISORY_LOCK_KEYS['available-prefixes'])
     def post(self, request, pk):
         self.queryset = self.queryset.restrict(request.user, 'add')
@@ -289,7 +283,6 @@ class AvailableIPAddressesView(ObjectValidationMixin, APIView):
     def get_parent(self, request, pk):
         raise NotImplemented()
 
-    @swagger_auto_schema(responses={200: serializers.AvailableIPSerializer(many=True)})
     def get(self, request, pk):
         parent = self.get_parent(request, pk)
         limit = get_results_limit(request)
@@ -308,10 +301,6 @@ class AvailableIPAddressesView(ObjectValidationMixin, APIView):
 
         return Response(serializer.data)
 
-    @swagger_auto_schema(
-        request_body=serializers.AvailableIPSerializer,
-        responses={201: serializers.IPAddressSerializer(many=True)}
-    )
     @advisory_lock(ADVISORY_LOCK_KEYS['available-ips'])
     def post(self, request, pk):
         self.queryset = self.queryset.restrict(request.user, 'add')
@@ -372,7 +361,6 @@ class IPRangeAvailableIPAddressesView(AvailableIPAddressesView):
 class AvailableVLANsView(ObjectValidationMixin, APIView):
     queryset = VLAN.objects.all()
 
-    @swagger_auto_schema(responses={200: serializers.AvailableVLANSerializer(many=True)})
     def get(self, request, pk):
         vlangroup = get_object_or_404(VLANGroup.objects.restrict(request.user), pk=pk)
         limit = get_results_limit(request)
@@ -385,10 +373,6 @@ class AvailableVLANsView(ObjectValidationMixin, APIView):
 
         return Response(serializer.data)
 
-    @swagger_auto_schema(
-        request_body=serializers.CreateAvailableVLANSerializer,
-        responses={201: serializers.VLANSerializer(many=True)}
-    )
     @advisory_lock(ADVISORY_LOCK_KEYS['available-vlans'])
     def post(self, request, pk):
         self.queryset = self.queryset.restrict(request.user, 'add')
