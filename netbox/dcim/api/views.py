@@ -2,6 +2,8 @@ import socket
 
 from django.http import Http404, HttpResponse, HttpResponseForbidden
 from django.shortcuts import get_object_or_404
+from drf_spectacular.utils import OpenApiParameter
+from drf_spectacular.types import OpenApiTypes
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
@@ -709,20 +711,20 @@ class ConnectedDeviceViewSet(ViewSet):
     * `peer_interface`: The name of the peer interface
     """
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
-    # _device_param = Parameter(
-    #     name='peer_device',
-    #     in_='query',
-    #     description='The name of the peer device',
-    #     required=True,
-    #     type=openapi.TYPE_STRING
-    # )
-    # _interface_param = Parameter(
-    #     name='peer_interface',
-    #     in_='query',
-    #     description='The name of the peer interface',
-    #     required=True,
-    #     type=openapi.TYPE_STRING
-    # )
+    _device_param = OpenApiParameter(
+        name='peer_device',
+        location='query',
+        description='The name of the peer device',
+        required=True,
+        type=OpenApiTypes.STR
+    )
+    _interface_param = OpenApiParameter(
+        name='peer_interface',
+        location='query',
+        description='The name of the peer interface',
+        required=True,
+        type=OpenApiTypes.STR
+    )
 
     def get_view_name(self):
         return "Connected Device Locator"
