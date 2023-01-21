@@ -909,6 +909,14 @@ class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, Connect
 
         return super().validate(data)
 
+    def get_extra_kwargs(self):
+        if self.instance:
+            kwargs = {'device': {'read_only': True}}
+        else:
+            kwargs = {}
+
+        return kwargs
+
 
 class RearPortSerializer(NetBoxModelSerializer, CabledObjectSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:rearport-detail')
