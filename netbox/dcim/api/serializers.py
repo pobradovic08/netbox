@@ -909,13 +909,16 @@ class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, Connect
 
         return super().validate(data)
 
-    def get_extra_kwargs(self):
-        if self.instance:
-            kwargs = {'device': {'read_only': True}}
-        else:
-            kwargs = {}
+    def get_fields(self, *args, **kwargs):
+        fields = super().get_fields(*args, **kwargs)
+        request = self.context.get('request', None)
+        view = self.context.get('view', None)
 
-        return kwargs
+        # get_extra_kwargs doesn't work if field explicitly declared on serializer...
+        if (self.instance):
+            fields['device'].read_only = True
+
+        return fields
 
 
 class RearPortSerializer(NetBoxModelSerializer, CabledObjectSerializer):
