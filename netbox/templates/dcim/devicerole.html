@@ -71,13 +71,6 @@
 </div>
 <div class="row mb-3">
 	<div class="col col-md-12">
-    <div class="card">
-      <h5 class="card-header">Devices</h5>
-      <div class="card-body htmx-container table-responsive"
-        hx-get="{% url 'dcim:device_list' %}?role_id={{ object.pk }}"
-        hx-trigger="load"
-      ></div>
-    </div>
     {% plugin_full_width_page object %}
   </div>
 </div>
