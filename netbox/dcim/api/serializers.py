@@ -8,6 +8,7 @@ from timezone_field.rest_framework import TimeZoneSerializerField
 from dcim.choices import *
 from dcim.constants import *
 from dcim.models import *
+from drf_spectacular.utils import extend_schema_field
 from ipam.api.nested_serializers import (
     NestedASNSerializer, NestedIPAddressSerializer, NestedL2VPNTerminationSerializer, NestedVLANSerializer,
     NestedVRFSerializer,
@@ -37,6 +38,7 @@ class CabledObjectSerializer(serializers.ModelSerializer):
     link_peers = serializers.SerializerMethodField(read_only=True)
     _occupied = serializers.SerializerMethodField(read_only=True)
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_link_peers_type(self, obj):
         """
         Return the type of the peer link terminations, or None.
@@ -49,6 +51,7 @@ class CabledObjectSerializer(serializers.ModelSerializer):
 
         return None
 
+    @extend_schema_field(serializers.DictField(allow_null=True))
     def get_link_peers(self, obj):
         """
         Return the appropriate serializer for the link termination model.
@@ -73,10 +76,12 @@ class ConnectedEndpointsSerializer(serializers.ModelSerializer):
     connected_endpoints = serializers.SerializerMethodField(read_only=True)
     connected_endpoints_reachable = serializers.SerializerMethodField(read_only=True)
 
+    @extend_schema_field(serializers.CharField(allow_null=True))
     def get_connected_endpoints_type(self, obj):
         if endpoints := obj.connected_endpoints:
             return f'{endpoints[0]._meta.app_label}.{endpoints[0]._meta.model_name}'
 
+    @extend_schema_field(serializers.DictField(allow_null=True))
     def get_connected_endpoints(self, obj):
         """
         Return the appropriate serializer for the type of connected object.
@@ -86,6 +91,7 @@ class ConnectedEndpointsSerializer(serializers.ModelSerializer):
             context = {'request': self.context['request']}
             return serializer(endpoints, many=True, context=context).data
 
+    @extend_schema_field(serializers.BooleanField(allow_null=True))
     def get_connected_endpoints_reachable(self, obj):
         return obj._path and obj._path.is_complete and obj._path.is_active
 
@@ -654,6 +660,7 @@ class DeviceSerializer(NetBoxModelSerializer):
             'comments', 'local_context_data', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
 
+    @extend_schema_field(NestedDeviceSerializer)
     def get_parent_device(self, obj):
         try:
             device_bay = obj.parent_bay
@@ -676,6 +683,7 @@ class DeviceWithConfigContextSerializer(DeviceSerializer):
             'comments', 'local_context_data', 'tags', 'custom_fields', 'config_context', 'created', 'last_updated',
         ]
 
+    @extend_schema_field(serializers.DictField)
     def get_config_context(self, obj):
         return obj.get_config_context()
 
