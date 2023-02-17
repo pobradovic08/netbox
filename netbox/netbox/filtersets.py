@@ -224,6 +224,14 @@ class BaseFilterSet(django_filters.FilterSet):
 
         return filters
 
+    @classmethod
+    def filter_for_lookup(cls, field, lookup_type):
+
+        if lookup_type == 'empty':
+            return django_filters.BooleanFilter, {}
+
+        return super().filter_for_lookup(field, lookup_type)
+
 
 class ChangeLoggedModelFilterSet(BaseFilterSet):
     """
