@@ -111,7 +111,7 @@ class HomeView(View):
             return stats
 
         # Compile changelog table
-        changelog = ObjectChange.objects.restrict(request.user, 'view').prefetch_related(
+        changelog = ObjectChange.objects.valid_models().restrict(request.user, 'view').prefetch_related(
             'user', 'changed_object_type'
         )[:10]
         changelog_table = ObjectChangeTable(changelog, user=request.user)
