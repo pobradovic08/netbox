@@ -418,7 +418,7 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
     #
 
     def get(self, request):
-        form = ImportForm()
+        form = ImportForm(model_form=self.model_form)
 
         return render(request, self.template_name, {
             'model': self.model_form._meta.model,
@@ -431,7 +431,7 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
     def post(self, request):
         logger = logging.getLogger('netbox.views.BulkImportView')
 
-        form = ImportForm(request.POST, request.FILES)
+        form = ImportForm(request.POST, request.FILES, model_form=self.model_form)
 
         if form.is_valid():
             logger.debug("Import form validation was successful")
