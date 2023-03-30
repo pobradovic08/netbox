@@ -31,6 +31,18 @@ from wireless.models import WirelessLAN
 from .nested_serializers import *
 
 
+class ReadonlyDeviceMixin:
+
+    def get_fields(self, *args, **kwargs):
+        fields = super().get_fields(*args, **kwargs)
+
+        # get_extra_kwargs doesn't work if field explicitly declared on serializer...
+        if (self.instance):
+            fields['device'].read_only = True
+
+        return fields
+
+
 class CabledObjectSerializer(serializers.ModelSerializer):
     cable = NestedCableSerializer(read_only=True)
     cable_end = serializers.CharField(read_only=True)
@@ -759,7 +771,7 @@ class ConsoleServerPortSerializer(NetBoxModelSerializer, CabledObjectSerializer,
         ]
 
 
-class ConsolePortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer):
+class ConsolePortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:consoleport-detail')
     device = NestedDeviceSerializer()
     module = ComponentNestedModuleSerializer(
@@ -787,7 +799,7 @@ class ConsolePortSerializer(NetBoxModelSerializer, CabledObjectSerializer, Conne
         ]
 
 
-class PowerOutletSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer):
+class PowerOutletSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:poweroutlet-detail')
     device = NestedDeviceSerializer()
     module = ComponentNestedModuleSerializer(
@@ -819,7 +831,7 @@ class PowerOutletSerializer(NetBoxModelSerializer, CabledObjectSerializer, Conne
         ]
 
 
-class PowerPortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer):
+class PowerPortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:powerport-detail')
     device = NestedDeviceSerializer()
     module = ComponentNestedModuleSerializer(
@@ -842,7 +854,7 @@ class PowerPortSerializer(NetBoxModelSerializer, CabledObjectSerializer, Connect
         ]
 
 
-class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer):
+class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, ConnectedEndpointsSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:interface-detail')
     device = NestedDeviceSerializer()
     vdcs = SerializedPKRelatedField(
@@ -909,19 +921,8 @@ class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, Connect
 
         return super().validate(data)
 
-    def get_fields(self, *args, **kwargs):
-        fields = super().get_fields(*args, **kwargs)
-        request = self.context.get('request', None)
-        view = self.context.get('view', None)
 
-        # get_extra_kwargs doesn't work if field explicitly declared on serializer...
-        if (self.instance):
-            fields['device'].read_only = True
-
-        return fields
-
-
-class RearPortSerializer(NetBoxModelSerializer, CabledObjectSerializer):
+class RearPortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:rearport-detail')
     device = NestedDeviceSerializer()
     module = ComponentNestedModuleSerializer(
@@ -950,7 +951,7 @@ class FrontPortRearPortSerializer(WritableNestedSerializer):
         fields = ['id', 'url', 'display', 'name', 'label', 'description']
 
 
-class FrontPortSerializer(NetBoxModelSerializer, CabledObjectSerializer):
+class FrontPortSerializer(NetBoxModelSerializer, CabledObjectSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:frontport-detail')
     device = NestedDeviceSerializer()
     module = ComponentNestedModuleSerializer(
@@ -969,7 +970,7 @@ class FrontPortSerializer(NetBoxModelSerializer, CabledObjectSerializer):
         ]
 
 
-class ModuleBaySerializer(NetBoxModelSerializer):
+class ModuleBaySerializer(NetBoxModelSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:modulebay-detail')
     device = NestedDeviceSerializer()
     installed_module = ModuleBayNestedModuleSerializer(required=False, allow_null=True)
@@ -982,7 +983,7 @@ class ModuleBaySerializer(NetBoxModelSerializer):
         ]
 
 
-class DeviceBaySerializer(NetBoxModelSerializer):
+class DeviceBaySerializer(NetBoxModelSerializer, ReadonlyDeviceMixin):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:devicebay-detail')
     device = NestedDeviceSerializer()
     installed_device = NestedDeviceSerializer(required=False, allow_null=True)
