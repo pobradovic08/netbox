@@ -1,10 +1,109 @@
 # NetBox v3.4
 
-## v3.4.4 (FUTURE)
+## v3.4.8 (FUTURE)
+
+---
+
+## v3.4.7 (2023-03-28)
+
+### Enhancements
+
+* [#11645](https://github.com/netbox-community/netbox/issues/11645) - Automatically set the scheduled time when executing reports/scripts at a recurring interval
+* [#11833](https://github.com/netbox-community/netbox/issues/11833) - Add fieldset support for custom script forms
+* [#11973](https://github.com/netbox-community/netbox/issues/11833) - Use SSID for representing wireless links, if set
+* [#11977](https://github.com/netbox-community/netbox/issues/11977) - Support designating multiple backends via `REMOTE_AUTH_BACKEND` config parameter
+* [#11990](https://github.com/netbox-community/netbox/issues/11990) - Improve error reporting for duplicate CSV column headings
+* [#11991](https://github.com/netbox-community/netbox/issues/11991) - Enable VDC assignment during bulk import/edit of interfaces
 
 ### Bug Fixes
 
+* [#11914](https://github.com/netbox-community/netbox/issues/11914) - Include parameters when exporting saved filters
+* [#11933](https://github.com/netbox-community/netbox/issues/11933) - Fix cloning of saved filters
+* [#11984](https://github.com/netbox-community/netbox/issues/11984) - Remove erroneous 802.3az PoE type
+* [#11979](https://github.com/netbox-community/netbox/issues/11979) - Correct URL for tags in route targets list
+* [#12008](https://github.com/netbox-community/netbox/issues/12008) - Enable cloning of export templates
+* [#12029](https://github.com/netbox-community/netbox/issues/12029) - Restore missing description field on virtual chassis form
+* [#12038](https://github.com/netbox-community/netbox/issues/12038) - Correct display of zero values for virtual chassis member priority
+* [#12048](https://github.com/netbox-community/netbox/issues/12048) - Enable cloning of tags
+* [#12058](https://github.com/netbox-community/netbox/issues/12058) - Enable cloning of config contexts
+
+---
+
+## v3.4.6 (2023-03-13)
+
+### Enhancements
+
+* [#10058](https://github.com/netbox-community/netbox/issues/10058) - Enable searching for devices/VMs by primary IP address
+* [#11011](https://github.com/netbox-community/netbox/issues/11011) - Add ability to toggle visibility of virtual interfaces under device view
+* [#11294](https://github.com/netbox-community/netbox/issues/11294) - Enable live preview of Markdown content
+* [#11807](https://github.com/netbox-community/netbox/issues/11807) - Restore default page size when navigating between views
+* [#11817](https://github.com/netbox-community/netbox/issues/11817) - Add `connected_endpoints` field to GraphQL API for cabled objects
+* [#11851](https://github.com/netbox-community/netbox/issues/11851) - Include IP version in GraphQL API representations of aggregates, prefixes, and IP addresses
+* [#11862](https://github.com/netbox-community/netbox/issues/11862) - Add Cisco StackWise 1T interface type
+* [#11871](https://github.com/netbox-community/netbox/issues/11871) - Add IEEE 802.3az PoE type for interfaces
+* [#11929](https://github.com/netbox-community/netbox/issues/11929) - Strip whitespace from CSV headers prior to validation
+
+### Bug Fixes
+
+* [#11470](https://github.com/netbox-community/netbox/issues/11470) - Avoid raising exception when filtering IPs by an invalid address
+* [#11565](https://github.com/netbox-community/netbox/issues/11565) - Apply custom field defaults to IP address created during FHRP group creation
+* [#11631](https://github.com/netbox-community/netbox/issues/11631) - Fix filtering changelog & journal entries by multiple content type IDs
+* [#11758](https://github.com/netbox-community/netbox/issues/11758) - Support non-URL-safe characters in plugin menu titles
+* [#11796](https://github.com/netbox-community/netbox/issues/11796) - When importing devices, restrict rack by location only if the location field is specified
+* [#11819](https://github.com/netbox-community/netbox/issues/11819) - Fix filtering of cable terminations by object type
+* [#11850](https://github.com/netbox-community/netbox/issues/11850) - Fix loading of CSV files containing a byte order mark
+* [#11903](https://github.com/netbox-community/netbox/issues/11903) - Fix escaping of return URL values for action buttons in tables
+* [#11927](https://github.com/netbox-community/netbox/issues/11927) - Correct loading of plugin resources with custom paths
+
+---
+
+## v3.4.5 (2023-02-21)
+
+### Enhancements
+
+* [#11110](https://github.com/netbox-community/netbox/issues/11110) - Add `start_address` and `end_address` filters for IP ranges
+* [#11592](https://github.com/netbox-community/netbox/issues/11592) - Introduce `FILE_UPLOAD_MAX_MEMORY_SIZE` configuration parameter
+* [#11685](https://github.com/netbox-community/netbox/issues/11685) - Match on containing prefixes and aggregates when querying for IP addresses using global search
+* [#11787](https://github.com/netbox-community/netbox/issues/11787) - Upgrade script will automatically rebuild missing search cache
+
+### Bug Fixes
+
+* [#11032](https://github.com/netbox-community/netbox/issues/11032) - Fix false custom validation errors during component creation
+* [#11226](https://github.com/netbox-community/netbox/issues/11226) - Ensure scripts and reports within submodules are automatically reloaded
+* [#11459](https://github.com/netbox-community/netbox/issues/11459) - Enable evaluating null values in custom validation rules
+* [#11473](https://github.com/netbox-community/netbox/issues/11473) - GraphQL requests specifying an invalid filter should return an empty queryset
+* [#11582](https://github.com/netbox-community/netbox/issues/11582) - Ensure form validation errors are displayed when adding virtual chassis members
+* [#11601](https://github.com/netbox-community/netbox/issues/11601) - Fix partial matching of start/end addresses for IP range search
+* [#11683](https://github.com/netbox-community/netbox/issues/11683) - Fix CSV header attribute detection when auto-detecting import format
+* [#11711](https://github.com/netbox-community/netbox/issues/11711) - Fix CSV import for multiple-object custom fields
+* [#11723](https://github.com/netbox-community/netbox/issues/11723) - Circuit terminations should link to their associated circuits (rather than site or provider network)
+* [#11775](https://github.com/netbox-community/netbox/issues/11775) - Skip checking for old search cache records when creating a new object
+* [#11786](https://github.com/netbox-community/netbox/issues/11786) - List only applicable object types in form widget when filtering custom fields
+
+---
+
+## v3.4.4 (2023-02-02)
+
+### Enhancements
+
+* [#10762](https://github.com/netbox-community/netbox/issues/10762) - Permit selection custom fields to have only one choice
+* [#11152](https://github.com/netbox-community/netbox/issues/11152) - Introduce AbortScript exception to elegantly abort scripts
+* [#11554](https://github.com/netbox-community/netbox/issues/11554) - Add module types count to manufacturers list
+* [#11585](https://github.com/netbox-community/netbox/issues/11585) - Add IP address filters for services
+* [#11598](https://github.com/netbox-community/netbox/issues/11598) - Add buttons to easily switch between rack list and elevations views
+
+### Bug Fixes
+
+* [#11267](https://github.com/netbox-community/netbox/issues/11267) - Avoid catching ImportErrors when loading plugin resources
+* [#11487](https://github.com/netbox-community/netbox/issues/11487) - Remove "set null" option from non-writable custom fields during bulk edit
+* [#11491](https://github.com/netbox-community/netbox/issues/11491) - Show edit/delete buttons in user tokens table
+* [#11528](https://github.com/netbox-community/netbox/issues/11528) - Permit import of devices using uploaded file
 * [#11555](https://github.com/netbox-community/netbox/issues/11555) - Avoid inadvertent interpretation of search query as regular expression under global search (previously [#11516](https://github.com/netbox-community/netbox/issues/11516))
+* [#11562](https://github.com/netbox-community/netbox/issues/11562) - Correct ordering of virtual chassis interfaces with duplicate names
+* [#11574](https://github.com/netbox-community/netbox/issues/11574) - Fix exception when attempting to schedule reports/scripts
+* [#11620](https://github.com/netbox-community/netbox/issues/11620) - Correct available filter choices for interface PoE type
+* [#11635](https://github.com/netbox-community/netbox/issues/11635) - Pre-populate assigned VRF when following "first available IP" link from prefix view
+* [#11650](https://github.com/netbox-community/netbox/issues/11650) - Display error message when attempting to create device component with duplicate name
 
 ---
 

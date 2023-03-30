@@ -1,6 +1,7 @@
+import json
+
 from django import forms
 from django.contrib.contenttypes.models import ContentType
-from django.http import QueryDict
 from django.utils.translation import gettext as _
 
 from dcim.models import DeviceRole, DeviceType, Location, Platform, Region, Site, SiteGroup
@@ -128,11 +129,10 @@ class SavedFilterForm(BootstrapMixin, forms.ModelForm):
 
     def __init__(self, *args, initial=None, **kwargs):
 
-        # Convert any parameters delivered via initial data to a dictionary
+        # Convert any parameters delivered via initial data to JSON data
         if initial and 'parameters' in initial:
             if type(initial['parameters']) is str:
-                # TODO: Make a utility function for this
-                initial['parameters'] = dict(QueryDict(initial['parameters']).lists())
+                initial['parameters'] = json.loads(initial['parameters'])
 
         super().__init__(*args, initial=initial, **kwargs)
 
@@ -253,6 +253,15 @@ class ConfigContextForm(BootstrapMixin, forms.ModelForm):
             'roles', 'device_types', 'platforms', 'cluster_types', 'cluster_groups', 'clusters', 'tenant_groups',
             'tenants', 'tags',
         )
+
+    def __init__(self, *args, initial=None, **kwargs):
+
+        # Convert data delivered via initial data to JSON data
+        if initial and 'data' in initial:
+            if type(initial['data']) is str:
+                initial['data'] = json.loads(initial['data'])
+
+        super().__init__(*args, initial=initial, **kwargs)
 
 
 class ImageAttachmentForm(BootstrapMixin, forms.ModelForm):
