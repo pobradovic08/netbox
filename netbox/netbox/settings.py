@@ -584,6 +584,24 @@ SPECTACULAR_SETTINGS = {
     "LICENSE": {"name": "Apache v2 License"},
     "VERSION": VERSION,
     'COMPONENT_SPLIT_REQUEST': True,
+    'ENUM_NAME_OVERRIDES': {
+        'LinkStatusEnum': 'dcim.choices.LinkStatusChoices',
+        'VirtualDeviceContextStatusEnum': 'dcim.choices.VirtualDeviceContextStatusChoices',
+        'WirelessAuthTypeEnum': 'wireless.choices.WirelessAuthTypeChoices',
+        'ServiceProtocolEnum': 'ipam.choices.ServiceProtocolChoices',
+        'FHRPGroupProtocolEnum': 'ipam.choices.FHRPGroupProtocolChoices',
+        'CableTypeEnum': 'dcim.choices.CableTypeChoices',
+        'PowerPortTypeEnum': 'dcim.choices.PowerPortTypeChoices',
+        'PortTypeEnum': 'dcim.choices.PortTypeChoices',
+        'PowerOutletTypeEnum': 'dcim.choices.PowerOutletTypeChoices',
+        'ConsolePortTypeEnum': 'dcim.choices.ConsolePortTypeChoices',
+        'L2VPNTypeEnum': 'ipam.choices.L2VPNTypeChoices',
+        'InterfaceTypeEnum': 'dcim.choices.InterfaceTypeChoices',
+        # These have two different models using identical enums so names aren't perfect
+        'ActiveStatusEnum': 'ipam.choices.IPRangeStatusChoices',
+        'ModuleStatusEnum': 'dcim.choices.ModuleStatusChoices',
+        'LocationStatusEnum': 'dcim.choices.LocationStatusChoices',
+    }
 }
 
 #
