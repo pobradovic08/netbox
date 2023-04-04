@@ -638,13 +638,20 @@ class InventoryItemTemplate(MPTTModel, ComponentTemplateModel):
         )
 
     def instantiate(self, **kwargs):
-        parent = InventoryItem.objects.get(name=self.parent.name, **kwargs) if self.parent else None
+        # if instance_map this means this is instantiating from a template, so need to map
+        # parent pointers to their previously instanced object and not the template one
+        instance_map = kwargs.pop('instance_map', None)
+        if self.parent and instance_map and self.parent.name in instance_map:
+            parent = instance_map[self.parent.name]
+        else:
+            parent = InventoryItem.objects.get(name=self.parent.name, **kwargs) if self.parent else None
+
         if self.component:
             model = self.component.component_model
             component = model.objects.get(name=self.component.name, **kwargs)
         else:
             component = None
-        return self.component_model(
+        obj = self.component_model(
             parent=parent,
             name=self.name,
             label=self.label,
@@ -654,3 +661,7 @@ class InventoryItemTemplate(MPTTModel, ComponentTemplateModel):
             part_id=self.part_id,
             **kwargs
         )
+        if instance_map is not None:
+            instance_map[self.name] = obj
+
+        return obj

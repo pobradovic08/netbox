@@ -766,15 +766,21 @@ class Device(PrimaryModel, ConfigContextModel):
                 'vc_position': "A device assigned to a virtual chassis must have its position defined."
             })
 
-    def _instantiate_components(self, queryset, bulk_create=True):
+    def _instantiate_components(self, queryset, bulk_create=True, from_template=False):
         """
         Instantiate components for the device from the specified component templates.
 
         Args:
             bulk_create: If True, bulk_create() will be called to create all components in a single query
                          (default). Otherwise, save() will be called on each instance individually.
+            from_template: If True will create an instance map to map parent-child template ids
+                           to the newly created instances.
         """
-        components = [obj.instantiate(device=self) for obj in queryset]
+        instance_map = None
+        if from_template:
+            instance_map = {}
+
+        components = [obj.instantiate(device=self, instance_map=instance_map) for obj in queryset]
         if components and bulk_create:
             model = components[0]._meta.model
             model.objects.bulk_create(components)
@@ -816,7 +822,7 @@ class Device(PrimaryModel, ConfigContextModel):
             self._instantiate_components(self.device_type.modulebaytemplates.all())
             self._instantiate_components(self.device_type.devicebaytemplates.all())
             # Disable bulk_create to accommodate MPTT
-            self._instantiate_components(self.device_type.inventoryitemtemplates.all(), bulk_create=False)
+            self._instantiate_components(self.device_type.inventoryitemtemplates.all(), bulk_create=False, from_template=True)
 
         # Update Site and Rack assignment for any child Devices
         devices = Device.objects.filter(parent_bay__device=self)
