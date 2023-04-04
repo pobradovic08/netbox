@@ -777,10 +777,12 @@ class Device(PrimaryModel, ConfigContextModel):
                            to the newly created instances.
         """
         instance_map = None
+        kwargs = {'device': self}
         if from_template:
-            instance_map = {}
+            kwargs['instance_map'] = {}
 
-        components = [obj.instantiate(device=self, instance_map=instance_map) for obj in queryset]
+        components = [obj.instantiate(**kwargs) for obj in queryset]
+
         if components and bulk_create:
             model = components[0]._meta.model
             model.objects.bulk_create(components)
