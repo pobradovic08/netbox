@@ -103,9 +103,8 @@ class TokenSerializer(ValidatedModelSerializer):
             else:
                 raise PermissionDenied("Unauthorized user.")
 
-            if user != grant_user:
-                if not request.user.has_perm('users.grant_token'):
-                    raise PermissionDenied("This user does not have permission to create tokens for other users.")
+            if user != grant_user and not request.user.has_perm('users.grant_token'):
+                raise PermissionDenied("This user does not have permission to create tokens for other users.")
 
         return data
 
