@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.auth.models import Group, User
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
+from rest_framework.exceptions import PermissionDenied
 
 from netbox.api.fields import ContentTypeField, IPNetworkSerializer, SerializedPKRelatedField
 from netbox.api.serializers import ValidatedModelSerializer
@@ -90,6 +91,23 @@ class TokenSerializer(ValidatedModelSerializer):
         if 'key' not in data:
             data['key'] = Token.generate_key()
         return super().to_internal_value(data)
+
+    def validate(self, data):
+        """
+        Check that the user has permissions to grant other users a token.
+        """
+        request = self.context.get("request")
+        if request and hasattr(request, "user"):
+            user = request.user
+        else:
+            raise PermissionDenied("Unauthorized user.")
+
+        grant_user = data['user']
+        if user != grant_user:
+            if not request.user.has_perm('users.grant_token'):
+                raise PermissionDenied("This user does not have permission to create tokens for other users.")
+
+        return data
 
 
 class TokenProvisionSerializer(serializers.Serializer):
