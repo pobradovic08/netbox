@@ -657,3 +657,8 @@ Note that we are _not_ passing an existing REST API token with this request. If 
     "description": ""
 }
 ```
+### Granting Other Users Tokens
+
+The REST API allows granting of tokens to other users, this is restricted by the `users.grant_token` permission.  This is achieved by assigning the user (or group) a permission on the Token object and specifying the `grant` action in the admin UI as shown below.
+
+![Adding the grant action to a permission](../media/admin_ui_grant_permission.png)
