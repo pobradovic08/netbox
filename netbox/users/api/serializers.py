@@ -96,16 +96,16 @@ class TokenSerializer(ValidatedModelSerializer):
         """
         Check that the user has permissions to grant other users a token.
         """
-        request = self.context.get("request")
-        if request and hasattr(request, "user"):
-            user = request.user
-        else:
-            raise PermissionDenied("Unauthorized user.")
+        if grant_user := data.get('user', None):
+            request = self.context.get("request")
+            if request and hasattr(request, "user"):
+                user = request.user
+            else:
+                raise PermissionDenied("Unauthorized user.")
 
-        grant_user = data['user']
-        if user != grant_user:
-            if not request.user.has_perm('users.grant_token'):
-                raise PermissionDenied("This user does not have permission to create tokens for other users.")
+            if user != grant_user:
+                if not request.user.has_perm('users.grant_token'):
+                    raise PermissionDenied("This user does not have permission to create tokens for other users.")
 
         return data
 
