@@ -32,24 +32,28 @@ from .nested_serializers import *
 
 
 class BaseReadonlyDeviceMixin:
-    field_name = 'device'
 
     def get_fields(self, *args, **kwargs):
         fields = super().get_fields(*args, **kwargs)
 
         # get_extra_kwargs doesn't work if field explicitly declared on serializer...
         if (self.instance):
-            fields[self.field_name].read_only = True
+            fields[self.get_field_name()].read_only = True
 
         return fields
 
 
 class ReadonlyDeviceMixin(BaseReadonlyDeviceMixin):
-    field_name = 'device'
+
+    # can't be a field as mucks up serializer
+    def get_field_name(self):
+        return "device"
 
 
 class ReadonlyDeviceTypeMixin(BaseReadonlyDeviceMixin):
-    field_name = 'device_type'
+
+    def get_field_name(self):
+        return "device_type"
 
 
 class CabledObjectSerializer(serializers.ModelSerializer):
