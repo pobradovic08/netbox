@@ -153,6 +153,19 @@ class TokenTest(
         response = self.client.post(url, data, format='json', **self.header)
         self.assertEqual(response.status_code, 403)
 
+    def test_provision_token_other_user(self):
+        """
+        Test the behavior of the token provisioning view when invalid credentials are supplied.
+        """
+        user2 = User.objects.create_user(username='testuser2')
+        data = {
+            'user': user2.id,
+        }
+        url = reverse('users-api:token-list')
+
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, 403)
+
 
 class ObjectPermissionTest(
     # No GraphQL support for ObjectPermission
