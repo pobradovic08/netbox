@@ -43,6 +43,18 @@ class ReadonlyDeviceMixin:
         return fields
 
 
+class ReadonlyDeviceTypeMixin:
+
+    def get_fields(self, *args, **kwargs):
+        fields = super().get_fields(*args, **kwargs)
+
+        # get_extra_kwargs doesn't work if field explicitly declared on serializer...
+        if (self.instance):
+            fields['device_type'].read_only = True
+
+        return fields
+
+
 class CabledObjectSerializer(serializers.ModelSerializer):
     cable = NestedCableSerializer(read_only=True)
     cable_end = serializers.CharField(read_only=True)
@@ -359,7 +371,7 @@ class ModuleTypeSerializer(NetBoxModelSerializer):
 # Component templates
 #
 
-class ConsolePortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class ConsolePortTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:consoleporttemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -411,7 +423,7 @@ class ConsoleServerPortTemplateSerializer(ValidatedModelSerializer):
         ]
 
 
-class PowerPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class PowerPortTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:powerporttemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -437,7 +449,7 @@ class PowerPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer)
         ]
 
 
-class PowerOutletTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class PowerOutletTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:poweroutlettemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -472,7 +484,7 @@ class PowerOutletTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerialize
         ]
 
 
-class InterfaceTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class InterfaceTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:interfacetemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -504,7 +516,7 @@ class InterfaceTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer)
         ]
 
 
-class RearPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class RearPortTemplateSerializer(ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:rearporttemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -526,7 +538,7 @@ class RearPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
         ]
 
 
-class FrontPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class FrontPortTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:frontporttemplate-detail')
     device_type = NestedDeviceTypeSerializer(
         required=False,
@@ -549,7 +561,7 @@ class FrontPortTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer)
         ]
 
 
-class ModuleBayTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class ModuleBayTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:modulebaytemplate-detail')
     device_type = NestedDeviceTypeSerializer()
 
@@ -561,7 +573,7 @@ class ModuleBayTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer)
         ]
 
 
-class DeviceBayTemplateSerializer(ReadonlyDeviceMixin, ValidatedModelSerializer):
+class DeviceBayTemplateSerializer(ReadonlyDeviceTypeMixin, ValidatedModelSerializer):
     url = serializers.HyperlinkedIdentityField(view_name='dcim-api:devicebaytemplate-detail')
     device_type = NestedDeviceTypeSerializer()
 
