@@ -31,28 +31,25 @@ from wireless.models import WirelessLAN
 from .nested_serializers import *
 
 
-class ReadonlyDeviceMixin:
+class BaseReadonlyDeviceMixin:
+    field_name = 'device'
 
     def get_fields(self, *args, **kwargs):
         fields = super().get_fields(*args, **kwargs)
 
         # get_extra_kwargs doesn't work if field explicitly declared on serializer...
         if (self.instance):
-            fields['device'].read_only = True
+            fields[self.field_name].read_only = True
 
         return fields
 
 
-class ReadonlyDeviceTypeMixin:
+class ReadonlyDeviceMixin(BaseReadonlyDeviceMixin):
+    field_name = 'device'
 
-    def get_fields(self, *args, **kwargs):
-        fields = super().get_fields(*args, **kwargs)
 
-        # get_extra_kwargs doesn't work if field explicitly declared on serializer...
-        if (self.instance):
-            fields['device_type'].read_only = True
-
-        return fields
+class ReadonlyDeviceTypeMixin(BaseReadonlyDeviceMixin):
+    field_name = 'device_type'
 
 
 class CabledObjectSerializer(serializers.ModelSerializer):
