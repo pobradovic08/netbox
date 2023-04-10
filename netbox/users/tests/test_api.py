@@ -166,6 +166,25 @@ class TokenTest(
         response = self.client.post(url, data, format='json', **self.header)
         self.assertEqual(response.status_code, 403)
 
+    def test_provision_token_permission(self):
+        object_type = ContentType.objects.get(app_label='users', model='token')
+
+        objectpermission = ObjectPermission(
+            name=f'Permission Token',
+            actions=['view', 'add', 'change', 'delete', 'grant'],
+        )
+        objectpermission.save()
+        objectpermission.object_types.add(object_type)
+        objectpermission.users.add(self.user)
+        user2 = User.objects.create_user(username='testuser2')
+        data = {
+            'user': user2.id,
+        }
+        url = reverse('users-api:token-list')
+
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, 201)
+
 
 class ObjectPermissionTest(
     # No GraphQL support for ObjectPermission
