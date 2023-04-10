@@ -38,22 +38,17 @@ class BaseReadonlyDeviceMixin:
 
         # get_extra_kwargs doesn't work if field explicitly declared on serializer...
         if (self.instance):
-            fields[self.get_field_name()].read_only = True
+            fields[self._field_name].read_only = True
 
         return fields
 
 
 class ReadonlyDeviceMixin(BaseReadonlyDeviceMixin):
-
-    # can't be a field as mucks up serializer
-    def get_field_name(self):
-        return "device"
+    _field_name = "device"
 
 
 class ReadonlyDeviceTypeMixin(BaseReadonlyDeviceMixin):
-
-    def get_field_name(self):
-        return "device_type"
+    _field_name = "device_type"
 
 
 class CabledObjectSerializer(serializers.ModelSerializer):
