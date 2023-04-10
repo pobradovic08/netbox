@@ -78,6 +78,10 @@ class ComponentModel(NetBoxModel):
             ),
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__original_device = self.device
+
     def __str__(self):
         if self.label:
             return f"{self.name} ({self.label})"
@@ -87,6 +91,14 @@ class ComponentModel(NetBoxModel):
         objectchange = super().to_objectchange(action)
         objectchange.related_object = self.device
         return objectchange
+
+    def clean(self):
+        super().clean()
+
+        if self.pk is None and self.__original_device != self.device:
+            raise ValidationError({
+                "device": "Device field is read-only and not updatable."
+            })
 
     @property
     def parent_object(self):
