@@ -1354,6 +1354,24 @@ class CommonInterfaceFilterSet(django_filters.FilterSet):
         label=_('L2VPN'),
     )
 
+    def filter_vlan_id(self, queryset, name, value):
+        value = value.strip()
+        if not value:
+            return queryset
+        return queryset.filter(
+            Q(untagged_vlan_id=value) |
+            Q(tagged_vlans=value)
+        )
+
+    def filter_vlan(self, queryset, name, value):
+        value = value.strip()
+        if not value:
+            return queryset
+        return queryset.filter(
+            Q(untagged_vlan_id__vid=value) |
+            Q(tagged_vlans__vid=value)
+        )
+
 
 class InterfaceFilterSet(
     ModularDeviceComponentFilterSet,
@@ -1460,24 +1478,6 @@ class InterfaceFilterSet(
             return queryset.filter(pk__in=vc_interface_ids)
         except Device.DoesNotExist:
             return queryset.none()
-
-    def filter_vlan_id(self, queryset, name, value):
-        value = value.strip()
-        if not value:
-            return queryset
-        return queryset.filter(
-            Q(untagged_vlan_id=value) |
-            Q(tagged_vlans=value)
-        )
-
-    def filter_vlan(self, queryset, name, value):
-        value = value.strip()
-        if not value:
-            return queryset
-        return queryset.filter(
-            Q(untagged_vlan_id__vid=value) |
-            Q(tagged_vlans__vid=value)
-        )
 
     def filter_kind(self, queryset, name, value):
         value = value.strip().lower()
@@ -1667,12 +1667,14 @@ class CableFilterSet(TenancyFilterSet, NetBoxModelFilterSet):
         field_name='terminations__termination_type'
     )
     termination_a_id = MultiValueNumberFilter(
+        method='filter_by_cable_end_a',
         field_name='terminations__termination_id'
     )
     termination_b_type = ContentTypeFilter(
         field_name='terminations__termination_type'
     )
     termination_b_id = MultiValueNumberFilter(
+        method='filter_by_cable_end_b',
         field_name='terminations__termination_id'
     )
     type = django_filters.MultipleChoiceFilter(
@@ -1729,6 +1731,18 @@ class CableFilterSet(TenancyFilterSet, NetBoxModelFilterSet):
         # Filter by a related object cached on CableTermination. Note the underscore preceding the field name.
         # Supported objects: device, rack, location, site
         return queryset.filter(**{f'terminations___{name}__in': value}).distinct()
+
+    def filter_by_cable_end(self, queryset, name, value, side):
+        # Filter by termination id and cable_end type
+        return queryset.filter(**{f'{name}__in': value, 'terminations__cable_end': side}).distinct()
+
+    def filter_by_cable_end_a(self, queryset, name, value):
+        # Filter by termination id and cable_end type
+        return self.filter_by_cable_end(queryset, name, value, CableEndChoices.SIDE_A)
+
+    def filter_by_cable_end_b(self, queryset, name, value):
+        # Filter by termination id and cable_end type
+        return self.filter_by_cable_end(queryset, name, value, CableEndChoices.SIDE_B)
 
 
 class CableTerminationFilterSet(BaseFilterSet):
