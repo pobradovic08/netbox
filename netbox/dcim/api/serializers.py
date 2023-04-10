@@ -897,6 +897,7 @@ class InterfaceSerializer(NetBoxModelSerializer, CabledObjectSerializer, Connect
         ]
 
     def validate(self, data):
+
         # Validate many-to-many VLAN assignments
         device = self.instance.device if self.instance else data.get('device')
         for vlan in data.get('tagged_vlans', []):
