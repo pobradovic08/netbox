@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from drf_yasg import openapi
 from drf_yasg.openapi import Parameter
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
@@ -418,6 +419,15 @@ class DeviceViewSet(ConfigContextQuerySetMixin, NetBoxModelViewSet):
             return serializers.DeviceSerializer
 
         return serializers.DeviceWithConfigContextSerializer
+
+    def create(self, request, *args, **kwargs):
+        # do validate / create for each item in serial instead of validating all data at once
+        for data in request.data:
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     @swagger_auto_schema(
         manual_parameters=[
