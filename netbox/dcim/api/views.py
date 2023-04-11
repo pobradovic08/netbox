@@ -424,14 +424,21 @@ class DeviceViewSet(ConfigContextQuerySetMixin, NetBoxModelViewSet):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         # do validate / create for each item in serial instead of validating all data at once
-        data_list = request.data if isinstance(request.data, list) else [request.data, ]
+        if is_bulk := isinstance(request.data, list):
+            return_data = []
+        data_list = request.data if is_bulk else [request.data, ]
 
         for data in data_list:
             serializer = self.get_serializer(data=data)
             serializer.is_valid(raise_exception=True)
             self.perform_create(serializer)
             headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+            if is_bulk:
+                return_data.append(serializer.data)
+            else:
+                return_data = serializer.data
+
+        return Response(return_data, status=status.HTTP_201_CREATED, headers=headers)
 
     @swagger_auto_schema(
         manual_parameters=[
