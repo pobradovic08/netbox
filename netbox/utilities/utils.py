@@ -11,8 +11,9 @@ from django.core import serializers
 from django.db.models import Count, OuterRef, Subquery
 from django.db.models.functions import Coalesce
 from django.http import QueryDict
-from django.utils.html import escape
 from django.utils import timezone
+from django.utils.datastructures import MultiValueDict
+from django.utils.html import escape
 from django.utils.timezone import localtime
 from jinja2.sandbox import SandboxedEnvironment
 from mptt.models import MPTTModel
@@ -229,6 +230,19 @@ def dict_to_filter_params(d, prefix=''):
         else:
             params[k] = val
     return params
+
+
+def dict_to_querydict(d, mutable=True):
+    """
+    Create a QueryDict instance from a regular Python dictionary.
+    """
+    qd = QueryDict(mutable=True)
+    for k, v in d.items():
+        item = MultiValueDict({k: v}) if isinstance(v, (list, tuple, set)) else {k: v}
+        qd.update(item)
+    if not mutable:
+        qd._mutable = False
+    return qd
 
 
 def normalize_querydict(querydict):
@@ -505,6 +519,8 @@ def clean_html(html, schemes):
         "h1": ["id"], "h2": ["id"], "h3": ["id"], "h4": ["id"], "h5": ["id"], "h6": ["id"],
         "a": ["href", "title"],
         "img": ["src", "title", "alt"],
+        "th": ["align"],
+        "td": ["align"],
     }
 
     return bleach.clean(

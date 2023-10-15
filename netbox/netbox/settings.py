@@ -25,7 +25,7 @@ from netbox.constants import RQ_QUEUE_DEFAULT, RQ_QUEUE_HIGH, RQ_QUEUE_LOW
 # Environment setup
 #
 
-VERSION = '3.5.4'
+VERSION = '3.6.4-dev'
 
 # Hostname
 HOSTNAME = platform.node()
@@ -95,10 +95,23 @@ CORS_ORIGIN_WHITELIST = getattr(configuration, 'CORS_ORIGIN_WHITELIST', [])
 CSRF_COOKIE_NAME = getattr(configuration, 'CSRF_COOKIE_NAME', 'csrftoken')
 CSRF_COOKIE_SECURE = getattr(configuration, 'CSRF_COOKIE_SECURE', False)
 CSRF_TRUSTED_ORIGINS = getattr(configuration, 'CSRF_TRUSTED_ORIGINS', [])
+DATA_UPLOAD_MAX_MEMORY_SIZE = getattr(configuration, 'DATA_UPLOAD_MAX_MEMORY_SIZE', 2621440)
 DATE_FORMAT = getattr(configuration, 'DATE_FORMAT', 'N j, Y')
 DATETIME_FORMAT = getattr(configuration, 'DATETIME_FORMAT', 'N j, Y g:i a')
 DEBUG = getattr(configuration, 'DEBUG', False)
 DEFAULT_DASHBOARD = getattr(configuration, 'DEFAULT_DASHBOARD', None)
+DEFAULT_PERMISSIONS = getattr(configuration, 'DEFAULT_PERMISSIONS', {
+    # Permit users to manage their own bookmarks
+    'extras.view_bookmark': ({'user': '$user'},),
+    'extras.add_bookmark': ({'user': '$user'},),
+    'extras.change_bookmark': ({'user': '$user'},),
+    'extras.delete_bookmark': ({'user': '$user'},),
+    # Permit users to manage their own API tokens
+    'users.view_token': ({'user': '$user'},),
+    'users.add_token': ({'user': '$user'},),
+    'users.change_token': ({'user': '$user'},),
+    'users.delete_token': ({'user': '$user'},),
+})
 DEVELOPER = getattr(configuration, 'DEVELOPER', False)
 DOCS_ROOT = getattr(configuration, 'DOCS_ROOT', os.path.join(os.path.dirname(BASE_DIR), 'docs'))
 EMAIL = getattr(configuration, 'EMAIL', {})
@@ -343,6 +356,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'django.contrib.humanize',
+    'django.forms',
     'corsheaders',
     'debug_toolbar',
     'graphiql_debug_toolbar',
@@ -356,6 +370,7 @@ INSTALLED_APPS = [
     'taggit',
     'timezone_field',
     'core',
+    'account',
     'circuits',
     'dcim',
     'ipam',
@@ -417,6 +432,9 @@ TEMPLATES = [
     },
 ]
 
+# This allows us to override Django's stock form widget templates
+FORM_RENDERER = 'django.forms.renderers.TemplatesSetting'
+
 # Set up authentication backends
 if type(REMOTE_AUTH_BACKEND) not in (list, tuple):
     REMOTE_AUTH_BACKEND = [REMOTE_AUTH_BACKEND]
@@ -461,14 +479,14 @@ LOGIN_REDIRECT_URL = f'/{BASE_PATH}'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-TEST_RUNNER = "django_rich.test.RichRunner"
-
 # Exclude potentially sensitive models from wildcard view exemption. These may still be exempted
 # by specifying the model individually in the EXEMPT_VIEW_PERMISSIONS configuration parameter.
 EXEMPT_EXCLUDE_MODELS = (
     ('auth', 'group'),
     ('auth', 'user'),
+    ('extras', 'configrevision'),
     ('users', 'objectpermission'),
+    ('users', 'token'),
 )
 
 # All URLs starting with a string listed here are exempt from login enforcement
@@ -483,6 +501,7 @@ AUTH_EXEMPT_PATHS = (
 # All URLs starting with a string listed here are exempt from maintenance mode enforcement
 MAINTENANCE_EXEMPT_PATHS = (
     f'/{BASE_PATH}admin/',
+    f'/{BASE_PATH}extras/config-revisions/',  # Allow modifying the configuration
 )
 
 SERIALIZATION_MODULES = {
@@ -696,6 +715,10 @@ RQ_QUEUES.update({
 #
 # Localization
 #
+
+LOCALE_PATHS = (
+    BASE_DIR + '/translations',
+)
 
 if not ENABLE_LOCALIZATION:
     USE_I18N = False

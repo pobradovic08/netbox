@@ -1,5 +1,8 @@
+from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.aggregates import JSONBAgg
 from django.db.models import OuterRef, Subquery, Q
+from django.db.utils import ProgrammingError
 
 from extras.models.tags import TaggedItem
 from utilities.query_functions import EmptyGroupByJSONBAgg
@@ -16,8 +19,7 @@ class ConfigContextQuerySet(RestrictedQuerySet):
           aggregate_data: If True, use the JSONBAgg aggregate function to return only the list of JSON data objects
         """
 
-        # `device_role` for Device; `role` for VirtualMachine
-        role = getattr(obj, 'device_role', None) or obj.role
+        role = obj.role
 
         # Device type and location assignment is relevant only for Devices
         device_type = getattr(obj, 'device_type', None)
@@ -118,7 +120,7 @@ class ConfigContextModelQuerySet(RestrictedQuerySet):
         if self.model._meta.model_name == 'device':
             base_query.add((Q(locations=OuterRef('location')) | Q(locations=None)), Q.AND)
             base_query.add((Q(device_types=OuterRef('device_type')) | Q(device_types=None)), Q.AND)
-            base_query.add((Q(roles=OuterRef('device_role')) | Q(roles=None)), Q.AND)
+            base_query.add((Q(roles=OuterRef('role')) | Q(roles=None)), Q.AND)
             base_query.add((Q(sites=OuterRef('site')) | Q(sites=None)), Q.AND)
             region_field = 'site__region'
             sitegroup_field = 'site__group'
@@ -151,3 +153,20 @@ class ConfigContextModelQuerySet(RestrictedQuerySet):
         )
 
         return base_query
+
+
+class ObjectChangeQuerySet(RestrictedQuerySet):
+
+    def valid_models(self):
+        # Exclude any change records which refer to an instance of a model that's no longer installed. This
+        # can happen when a plugin is removed but its data remains in the database, for example.
+        try:
+            content_types = ContentType.objects.get_for_models(*apps.get_models()).values()
+        except ProgrammingError:
+            # Handle the case where the database schema has not yet been initialized
+            content_types = ContentType.objects.none()
+
+        content_type_ids = set(
+            ct.pk for ct in content_types
+        )
+        return self.filter(changed_object_type_id__in=content_type_ids)

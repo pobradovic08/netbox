@@ -366,7 +366,7 @@ class BaseScript:
         if self.fieldsets:
             fieldsets.extend(self.fieldsets)
         else:
-            fields = (name for name, _ in self._get_vars().items())
+            fields = list(name for name, _ in self._get_vars().items())
             fieldsets.append(('Script Data', fields))
 
         # Append the default fieldset if defined in the Meta class
@@ -390,29 +390,34 @@ class BaseScript:
         # Set initial "commit" checkbox state based on the script's Meta parameter
         form.fields['_commit'].initial = self.commit_default
 
+        # Hide fields if scheduling has been disabled
+        if not self.scheduling_enabled:
+            form.fields['_schedule_at'].widget = forms.HiddenInput()
+            form.fields['_interval'].widget = forms.HiddenInput()
+
         return form
 
     # Logging
 
     def log_debug(self, message):
         self.logger.log(logging.DEBUG, message)
-        self.log.append((LogLevelChoices.LOG_DEFAULT, message))
+        self.log.append((LogLevelChoices.LOG_DEFAULT, str(message)))
 
     def log_success(self, message):
         self.logger.log(logging.INFO, message)  # No syslog equivalent for SUCCESS
-        self.log.append((LogLevelChoices.LOG_SUCCESS, message))
+        self.log.append((LogLevelChoices.LOG_SUCCESS, str(message)))
 
     def log_info(self, message):
         self.logger.log(logging.INFO, message)
-        self.log.append((LogLevelChoices.LOG_INFO, message))
+        self.log.append((LogLevelChoices.LOG_INFO, str(message)))
 
     def log_warning(self, message):
         self.logger.log(logging.WARNING, message)
-        self.log.append((LogLevelChoices.LOG_WARNING, message))
+        self.log.append((LogLevelChoices.LOG_WARNING, str(message)))
 
     def log_failure(self, message):
         self.logger.log(logging.ERROR, message)
-        self.log.append((LogLevelChoices.LOG_FAILURE, message))
+        self.log.append((LogLevelChoices.LOG_FAILURE, str(message)))
 
     # Convenience functions
 

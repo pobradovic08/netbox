@@ -1,5 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch
 from django.db.models.expressions import RawSQL
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -10,6 +10,7 @@ from dcim.filtersets import InterfaceFilterSet
 from dcim.models import Interface, Site
 from netbox.views import generic
 from tenancy.views import ObjectContactsView
+from utilities.tables import get_table_ordering
 from utilities.utils import count_related
 from utilities.views import ViewTab, register_model_view
 from virtualization.filtersets import VMInterfaceFilterSet
@@ -198,7 +199,7 @@ class RIRBulkDeleteView(generic.BulkDeleteView):
 #
 
 class ASNRangeListView(generic.ObjectListView):
-    queryset = ASNRange.objects.all()
+    queryset = ASNRange.objects.annotate_asn_counts()
     filterset = filtersets.ASNRangeFilterSet
     filterset_form = forms.ASNRangeFilterForm
     table = tables.ASNRangeTable
@@ -215,7 +216,7 @@ class ASNRangeASNsView(generic.ObjectChildrenView):
     child_model = ASN
     table = tables.ASNTable
     filterset = filtersets.ASNFilterSet
-    template_name = 'ipam/asnrange/asns.html'
+    template_name = 'generic/object_children.html'
     tab = ViewTab(
         label=_('ASNs'),
         badge=lambda x: x.get_child_asns().count(),
@@ -247,18 +248,14 @@ class ASNRangeBulkImportView(generic.BulkImportView):
 
 
 class ASNRangeBulkEditView(generic.BulkEditView):
-    queryset = ASNRange.objects.annotate(
-        site_count=count_related(Site, 'asns')
-    )
+    queryset = ASNRange.objects.annotate_asn_counts()
     filterset = filtersets.ASNRangeFilterSet
     table = tables.ASNRangeTable
     form = forms.ASNRangeBulkEditForm
 
 
 class ASNRangeBulkDeleteView(generic.BulkDeleteView):
-    queryset = ASNRange.objects.annotate(
-        site_count=count_related(Site, 'asns')
-    )
+    queryset = ASNRange.objects.annotate_asn_counts()
     filterset = filtersets.ASNRangeFilterSet
     table = tables.ASNRangeTable
 
@@ -609,7 +606,7 @@ class PrefixIPAddressesView(generic.ObjectChildrenView):
         return parent.get_child_ips().restrict(request.user, 'view').prefetch_related('vrf', 'tenant', 'tenant__group')
 
     def prep_table_data(self, request, queryset, parent):
-        if not request.GET.get('q') and not request.GET.get('sort'):
+        if not get_table_ordering(request, self.table):
             return add_available_ipaddresses(parent.prefix, queryset, parent.is_pool)
         return queryset
 
@@ -819,7 +816,6 @@ class IPAddressAssignView(generic.ObjectView):
         table = None
 
         if form.is_valid():
-
             addresses = self.queryset.prefetch_related('vrf', 'tenant')
             # Limit to 100 results
             addresses = filtersets.IPAddressFilterSet(request.POST, addresses).qs[:100]
@@ -869,7 +865,7 @@ class IPAddressRelatedIPsView(generic.ObjectChildrenView):
     child_model = IPAddress
     table = tables.IPAddressTable
     filterset = filtersets.IPAddressFilterSet
-    template_name = 'ipam/ipaddress/ip_addresses.html'
+    template_name = 'generic/object_children.html'
     tab = ViewTab(
         label=_('Related IPs'),
         badge=lambda x: x.get_related_ips().count(),
@@ -886,9 +882,7 @@ class IPAddressRelatedIPsView(generic.ObjectChildrenView):
 #
 
 class VLANGroupListView(generic.ObjectListView):
-    queryset = VLANGroup.objects.annotate(
-        vlan_count=count_related(VLAN, 'group')
-    )
+    queryset = VLANGroup.objects.annotate_utilization().prefetch_related('tags')
     filterset = filtersets.VLANGroupFilterSet
     filterset_form = forms.VLANGroupFilterForm
     table = tables.VLANGroupTable
@@ -896,28 +890,15 @@ class VLANGroupListView(generic.ObjectListView):
 
 @register_model_view(VLANGroup)
 class VLANGroupView(generic.ObjectView):
-    queryset = VLANGroup.objects.all()
+    queryset = VLANGroup.objects.annotate_utilization().prefetch_related('tags')
 
     def get_extra_context(self, request, instance):
         related_models = (
             (VLAN.objects.restrict(request.user, 'view').filter(group=instance), 'group_id'),
         )
 
-        # TODO: Replace with embedded table
-        vlans = VLAN.objects.restrict(request.user, 'view').filter(group=instance).prefetch_related(
-            Prefetch('prefixes', queryset=Prefix.objects.restrict(request.user)),
-            'tenant', 'site', 'role',
-        ).order_by('vid')
-        vlans = add_available_vlans(vlans, vlan_group=instance)
-
-        vlans_table = tables.VLANTable(vlans, user=request.user, exclude=('group',))
-        if request.user.has_perm('ipam.change_vlan') or request.user.has_perm('ipam.delete_vlan'):
-            vlans_table.columns.show('pk')
-        vlans_table.configure(request)
-
         return {
             'related_models': related_models,
-            'vlans_table': vlans_table,
         }
 
 
@@ -938,20 +919,42 @@ class VLANGroupBulkImportView(generic.BulkImportView):
 
 
 class VLANGroupBulkEditView(generic.BulkEditView):
-    queryset = VLANGroup.objects.annotate(
-        vlan_count=count_related(VLAN, 'group')
-    )
+    queryset = VLANGroup.objects.annotate_utilization().prefetch_related('tags')
     filterset = filtersets.VLANGroupFilterSet
     table = tables.VLANGroupTable
     form = forms.VLANGroupBulkEditForm
 
 
 class VLANGroupBulkDeleteView(generic.BulkDeleteView):
-    queryset = VLANGroup.objects.annotate(
-        vlan_count=count_related(VLAN, 'group')
-    )
+    queryset = VLANGroup.objects.annotate_utilization().prefetch_related('tags')
     filterset = filtersets.VLANGroupFilterSet
     table = tables.VLANGroupTable
+
+
+@register_model_view(VLANGroup, 'vlans')
+class VLANGroupVLANsView(generic.ObjectChildrenView):
+    queryset = VLANGroup.objects.all()
+    child_model = VLAN
+    table = tables.VLANTable
+    filterset = filtersets.VLANFilterSet
+    template_name = 'generic/object_children.html'
+    tab = ViewTab(
+        label=_('VLANs'),
+        badge=lambda x: x.get_child_vlans().count(),
+        permission='ipam.view_vlan',
+        weight=500
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_child_vlans().restrict(request.user, 'view').prefetch_related(
+            Prefetch('prefixes', queryset=Prefix.objects.restrict(request.user)),
+            'tenant', 'site', 'role',
+        )
+
+    def prep_table_data(self, request, queryset, parent):
+        if not get_table_ordering(request, self.table):
+            return add_available_vlans(parent.get_child_vlans(), parent)
+        return queryset
 
 
 #
@@ -972,7 +975,6 @@ class FHRPGroupView(generic.ObjectView):
     queryset = FHRPGroup.objects.all()
 
     def get_extra_context(self, request, instance):
-
         # Get assigned interfaces
         members_table = tables.FHRPGroupAssignmentTable(
             data=FHRPGroupAssignment.objects.restrict(request.user, 'view').filter(group=instance),
@@ -1086,7 +1088,7 @@ class VLANInterfacesView(generic.ObjectChildrenView):
     child_model = Interface
     table = tables.VLANDevicesTable
     filterset = InterfaceFilterSet
-    template_name = 'ipam/vlan/interfaces.html'
+    template_name = 'generic/object_children.html'
     tab = ViewTab(
         label=_('Device Interfaces'),
         badge=lambda x: x.get_interfaces().count(),
@@ -1104,7 +1106,7 @@ class VLANVMInterfacesView(generic.ObjectChildrenView):
     child_model = VMInterface
     table = tables.VLANVirtualMachinesTable
     filterset = VMInterfaceFilterSet
-    template_name = 'ipam/vlan/vminterfaces.html'
+    template_name = 'generic/object_children.html'
     tab = ViewTab(
         label=_('VM Interfaces'),
         badge=lambda x: x.get_vminterfaces().count(),

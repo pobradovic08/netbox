@@ -1,5 +1,129 @@
 # NetBox v3.5
 
+## v3.5.9 (2023-08-28)
+
+### Enhancements
+
+* [#12489](https://github.com/netbox-community/netbox/issues/12489) - Dynamically render location and device lists under site and location views
+* [#12825](https://github.com/netbox-community/netbox/issues/12825) - Display assigned values count per obejct type under custom field view
+* [#13313](https://github.com/netbox-community/netbox/issues/13313) - Enable filtering IP ranges by containing prefix
+* [#13415](https://github.com/netbox-community/netbox/issues/13415) - Include request object in custom link renderer on tables
+* [#13536](https://github.com/netbox-community/netbox/issues/13536) - Move child VLANs list to a separate tab under VLAN group view
+* [#13542](https://github.com/netbox-community/netbox/issues/13542) - Pass additional HTTP headers through to custom script context
+* [#13585](https://github.com/netbox-community/netbox/issues/13585) - Introduce `empty` lookup for numeric value filters
+
+### Bug Fixes
+
+* [#11272](https://github.com/netbox-community/netbox/issues/11272) - Fix localization support for device position field
+* [#13358](https://github.com/netbox-community/netbox/issues/13358) - Git backend should send HTTP auth headers only if credentials have been defined
+* [#13477](https://github.com/netbox-community/netbox/issues/13477) - Fix filtering of modified objects after bulk import/update
+* [#13478](https://github.com/netbox-community/netbox/issues/13478) - Fix filtering of export templates by content type under web UI
+* [#13500](https://github.com/netbox-community/netbox/issues/13500) - Fix form validation for bulk update of L2VPN terminations via bulk import form
+* [#13503](https://github.com/netbox-community/netbox/issues/13503) - Fix utilization graph proportions when localization is enabled
+* [#13507](https://github.com/netbox-community/netbox/issues/13507) - Avoid raising exception for invalid content type during global search
+* [#13516](https://github.com/netbox-community/netbox/issues/13516) - Plugin utility functions should be importable from `extras.plugins`
+* [#13530](https://github.com/netbox-community/netbox/issues/13530) - Ensure script log messages can be serialized as JSON data
+* [#13543](https://github.com/netbox-community/netbox/issues/13543) - Config context tab under device/VM view should not require `extras.view_configcontext` permission
+* [#13544](https://github.com/netbox-community/netbox/issues/13544) - Ensure `reindex` command clears all cached values when not in lazy mode
+* [#13556](https://github.com/netbox-community/netbox/issues/13556) - Correct REST API representation of VDC status choice
+* [#13569](https://github.com/netbox-community/netbox/issues/13569) - Fix selection widgets for related interfaces when bulk editing interfaces under device view
+
+---
+
+## v3.5.8 (2023-08-15)
+
+### Enhancements
+
+* [#10030](https://github.com/netbox-community/netbox/issues/10030) - Ship a validation schema for the device type library with each release
+* [#11675](https://github.com/netbox-community/netbox/issues/11675) - Add support for specifying import/export route targets during VRF bulk import
+* [#11922](https://github.com/netbox-community/netbox/issues/11922) - Automatically populate any VDC assignments from the parent when adding a child interface via the UI
+* [#12889](https://github.com/netbox-community/netbox/issues/12889) - Add 400GE CFP2 interface type
+* [#13033](https://github.com/netbox-community/netbox/issues/13033) - Add human-friendly speed column to interfaces table
+* [#13151](https://github.com/netbox-community/netbox/issues/13151) - Add "assigned" filter for IP addresses
+* [#13368](https://github.com/netbox-community/netbox/issues/13368) - List installed plugins on the server error report page
+* [#13442](https://github.com/netbox-community/netbox/issues/13442) - Add 200 and 400 Gbps speeds to dropdown choices on interface form
+
+### Bug Fixes
+
+* [#11578](https://github.com/netbox-community/netbox/issues/11578) - Fix schema definition for available IP & VLAN REST API endpoints
+* [#12639](https://github.com/netbox-community/netbox/issues/12639) - Raise validation error for invalid alphanumeric ranges when creating objects
+* [#12665](https://github.com/netbox-community/netbox/issues/12665) - Avoid escaping semicolons when rendering custom links
+* [#12750](https://github.com/netbox-community/netbox/issues/12750) - Automatically delete an AutoSyncRecord when its object is deleted
+* [#13343](https://github.com/netbox-community/netbox/issues/13343) - Fix filtering of circuits under provider network view
+* [#13369](https://github.com/netbox-community/netbox/issues/13369) - Fix job termination status for failed reports
+* [#13414](https://github.com/netbox-community/netbox/issues/13414) - Fix support for "hide-if-unset" custom fields on bulk import forms
+* [#13446](https://github.com/netbox-community/netbox/issues/13446) - Don't disable bulk edit/delete buttons after deselecting "select all" checkbox
+* [#13451](https://github.com/netbox-community/netbox/issues/13451) - Disable table ordering for custom link columns
+
+---
+
+## v3.5.7 (2023-07-28)
+
+### Enhancements
+
+* [#11803](https://github.com/netbox-community/netbox/issues/11803) - Move non-rack devices list to a separate tab under the rack view
+* [#12625](https://github.com/netbox-community/netbox/issues/12625) - Mask sensitive parameters when viewing a configured data source
+* [#13009](https://github.com/netbox-community/netbox/issues/13009) - Add IEC 10609-1 and NBR 14136 power port & outlet types
+* [#13097](https://github.com/netbox-community/netbox/issues/13097) - Implement a faster initial poll for report & script results
+* [#13234](https://github.com/netbox-community/netbox/issues/13234) - Add 100GBASE-X-DSFP and 100GBASE-X-SFPDD interface types
+
+### Bug Fixes
+
+* [#13051](https://github.com/netbox-community/netbox/issues/13051) - Fix Markdown support for table cell alignment
+* [#13167](https://github.com/netbox-community/netbox/issues/13167) - Fix missing script results when fetched via REST API
+* [#13233](https://github.com/netbox-community/netbox/issues/13233) - Remove extraneous VLAN group field from bulk edit form for interfaces
+* [#13237](https://github.com/netbox-community/netbox/issues/13237) - Permit unauthenticated access to content types REST API endpoint when `LOGIN_REQUIRED` is false
+* [#13285](https://github.com/netbox-community/netbox/issues/13285) - Fix exception when importing device type missing rack unit height value
+
+---
+
+## v3.5.6 (2023-07-10)
+
+### Bug Fixes
+
+* [#13061](https://github.com/netbox-community/netbox/issues/13061) - Fix display of last result for scripts & reports with a custom name defined
+* [#13096](https://github.com/netbox-community/netbox/issues/13096) - Hide scheduling fields for all scripts with scheduling disabled
+* [#13105](https://github.com/netbox-community/netbox/issues/13105) - Fix exception when attempting to allocate next available IP address from prefix marked as utilized
+* [#13116](https://github.com/netbox-community/netbox/issues/13116) - Catch ProgrammingError exception when starting NetBox without pre-populated content types
+
+---
+
+## v3.5.5 (2023-07-06)
+
+### Enhancements
+
+* [#11738](https://github.com/netbox-community/netbox/issues/11738) - Annotate VLAN group utilization
+* [#12499](https://github.com/netbox-community/netbox/issues/12499) - Add "copy to clipboard" buttons in UI for IP addresses
+* [#12945](https://github.com/netbox-community/netbox/issues/12945) - Add 100GE QSFP-DD interface type
+* [#12955](https://github.com/netbox-community/netbox/issues/12955) - Include additional contact details on contact assignments table
+* [#13065](https://github.com/netbox-community/netbox/issues/13065) - Associate contact assignments with their objects in the change log
+
+### Bug Fixes
+
+* [#11335](https://github.com/netbox-community/netbox/issues/11335) - Exclude stale content types when retrieving changelog records
+* [#12533](https://github.com/netbox-community/netbox/issues/12533) - Fix REST API validation of null values for several interface attributes
+* [#12579](https://github.com/netbox-community/netbox/issues/12579) - Fix exception when clicking "create and add another" to add a cable
+* [#12617](https://github.com/netbox-community/netbox/issues/12617) - Populate prechange snapshot on parent object when assigning/removing primary IP address
+* [#12760](https://github.com/netbox-community/netbox/issues/12760) - Avoid rendering partial HTMX responses when restoring browser tabs
+* [#12842](https://github.com/netbox-community/netbox/issues/12842) - Improve handling of exceptions when loading reports
+* [#12849](https://github.com/netbox-community/netbox/issues/12849) - Fix LDAP group permissions assignment for API clients
+* [#12951](https://github.com/netbox-community/netbox/issues/12951) - Display consistent parent information for each termination under cable view
+* [#12953](https://github.com/netbox-community/netbox/issues/12953) - Fix designation of primary IP addresses during interface assignment
+* [#12960](https://github.com/netbox-community/netbox/issues/12960) - Fix OpenAPI schema for various choice fields
+* [#12961](https://github.com/netbox-community/netbox/issues/12961) - Set correct return URL for object contacts tabs
+* [#12966](https://github.com/netbox-community/netbox/issues/12966) - Avoid catching database exceptions when maintenance mode is disabled
+* [#12975](https://github.com/netbox-community/netbox/issues/12975) - Correct URL for VirtualDeviceContext API serializer
+* [#12977](https://github.com/netbox-community/netbox/issues/12977) - Fix URL parameters for object count dashboard widgets
+* [#12983](https://github.com/netbox-community/netbox/issues/12983) - Avoid erroneously clearing many-to-many assignments during bulk edit
+* [#12989](https://github.com/netbox-community/netbox/issues/12989) - Fix bulk import of tags for device & module types
+* [#13011](https://github.com/netbox-community/netbox/issues/13011) - Do not escape commas when rendering custom links
+* [#13047](https://github.com/netbox-community/netbox/issues/13047) - Correct ASN count under ASN ranges list
+* [#13056](https://github.com/netbox-community/netbox/issues/13056) - Add `config_template` field to device API serializer
+* [#13092](https://github.com/netbox-community/netbox/issues/13092) - Allow nullifying power port max & allocated draw values during bulk edit
+* [#13100](https://github.com/netbox-community/netbox/issues/13100) - Fix ValueError exception when searching for virtual device context for non-numeric values
+
+---
+
 ## v3.5.4 (2023-06-20)
 
 ### Enhancements

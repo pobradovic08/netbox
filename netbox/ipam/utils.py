@@ -1,7 +1,15 @@
 import netaddr
 
 from .constants import *
-from .models import ASN, Prefix, VLAN
+from .models import Prefix, VLAN
+
+__all__ = (
+    'add_available_ipaddresses',
+    'add_available_vlans',
+    'add_requested_prefixes',
+    'get_next_available_prefix',
+    'rebuild_prefixes',
+)
 
 
 def add_requested_prefixes(parent, prefix_list, show_available=True, show_assigned=True):
@@ -121,7 +129,7 @@ def add_available_vlans(vlans, vlan_group=None):
         })
 
     vlans = list(vlans) + new_vlans
-    vlans.sort(key=lambda v: v.vid if type(v) == VLAN else v['vid'])
+    vlans.sort(key=lambda v: v.vid if type(v) is VLAN else v['vid'])
 
     return vlans
 
@@ -184,3 +192,15 @@ def rebuild_prefixes(vrf):
 
     # Final flush of any remaining Prefixes
     Prefix.objects.bulk_update(update_queue, ['_depth', '_children'])
+
+
+def get_next_available_prefix(ipset, prefix_size):
+    """
+    Given a prefix length, allocate the next available prefix from an IPSet.
+    """
+    for available_prefix in ipset.iter_cidrs():
+        if prefix_size >= available_prefix.prefixlen:
+            allocated_prefix = f"{available_prefix.network}/{prefix_size}"
+            ipset.remove(allocated_prefix)
+            return allocated_prefix
+    return None

@@ -1,9 +1,13 @@
 from django import template
 from django.http import QueryDict
 
+from extras.choices import CustomFieldTypeChoices
+from utilities.utils import dict_to_querydict
+
 __all__ = (
     'badge',
     'checkmark',
+    'copy_content',
     'customfield_value',
     'tag',
 )
@@ -35,6 +39,11 @@ def customfield_value(customfield, value):
         customfield: A CustomField instance
         value: The custom field value applied to an object
     """
+    if value:
+        if customfield.type == CustomFieldTypeChoices.TYPE_SELECT:
+            value = customfield.get_choice_label(value)
+        elif customfield.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
+            value = [customfield.get_choice_label(v) for v in value]
     return {
         'customfield': customfield,
         'value': value,
@@ -77,6 +86,17 @@ def checkmark(value, show_false=True, true='Yes', false='No'):
     }
 
 
+@register.inclusion_tag('builtins/copy_content.html')
+def copy_content(target, prefix=None, color='primary'):
+    """
+    Display a copy button to copy the content of a field.
+    """
+    return {
+        'target': f'#{prefix or ""}{target}',
+        'color': f'btn-{color}'
+    }
+
+
 @register.inclusion_tag('builtins/htmx_table.html', takes_context=True)
 def htmx_table(context, viewname, return_url=None, **kwargs):
     """
@@ -87,8 +107,7 @@ def htmx_table(context, viewname, return_url=None, **kwargs):
         viewname: The name of the view to use for the HTMX request (e.g. `dcim:site_list`)
         return_url: The URL to pass as the `return_url`. If not provided, the current request's path will be used.
     """
-    url_params = QueryDict(mutable=True)
-    url_params.update(kwargs)
+    url_params = dict_to_querydict(kwargs)
     url_params['return_url'] = return_url or context['request'].path
     return {
         'viewname': viewname,

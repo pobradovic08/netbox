@@ -3,12 +3,13 @@ import re
 from copy import deepcopy
 
 from django.contrib import messages
+from django.contrib.contenttypes.fields import GenericRel
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.db import transaction, IntegrityError
 from django.db.models import ManyToManyField, ProtectedError
 from django.db.models.fields.reverse_related import ManyToManyRel
-from django.forms import ModelMultipleChoiceField, MultipleHiddenInput
+from django.forms import HiddenInput, ModelMultipleChoiceField, MultipleHiddenInput
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
@@ -313,6 +314,13 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
         """
         return data
 
+    def _get_form_fields(self):
+        # Exclude any fields which use a HiddenInput widget
+        return {
+            name: field for name, field in self.model_form().fields.items()
+            if type(field.widget) is not HiddenInput
+        }
+
     def _save_object(self, model_form, request):
 
         # Save the primary object
@@ -430,7 +438,7 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
         return render(request, self.template_name, {
             'model': self.model_form._meta.model,
             'form': form,
-            'fields': self.model_form().fields,
+            'fields': self._get_form_fields(),
             'return_url': self.get_return_url(request),
             **self.get_extra_context(request),
         })
@@ -458,7 +466,7 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
                     messages.success(request, msg)
 
                     view_name = get_viewname(model, action='list')
-                    results_url = f"{reverse(view_name)}?created_by_request={request.id}"
+                    results_url = f"{reverse(view_name)}?modified_by_request={request.id}"
                     return redirect(results_url)
 
             except (AbortTransaction, ValidationError):
@@ -475,7 +483,7 @@ class BulkImportView(GetReturnURLMixin, BaseMultiObjectView):
         return render(request, self.template_name, {
             'model': model,
             'form': form,
-            'fields': self.model_form().fields,
+            'fields': self._get_form_fields(),
             'return_url': self.get_return_url(request),
             **self.get_extra_context(request),
         })
@@ -512,9 +520,11 @@ class BulkEditView(GetReturnURLMixin, BaseMultiObjectView):
                 model_field = self.queryset.model._meta.get_field(name)
                 if isinstance(model_field, (ManyToManyField, ManyToManyRel)):
                     m2m_fields[name] = model_field
+                elif isinstance(model_field, GenericRel):
+                    # Ignore generic relations (these may be used for other purposes in the form)
+                    continue
                 else:
                     model_fields[name] = model_field
-
             except FieldDoesNotExist:
                 # This form field is used to modify a field rather than set its value directly
                 model_fields[name] = None
@@ -551,7 +561,7 @@ class BulkEditView(GetReturnURLMixin, BaseMultiObjectView):
             for name, m2m_field in m2m_fields.items():
                 if name in form.nullable_fields and name in nullified_fields:
                     getattr(obj, name).clear()
-                else:
+                elif form.cleaned_data[name]:
                     getattr(obj, name).set(form.cleaned_data[name])
 
             # Add/remove tags

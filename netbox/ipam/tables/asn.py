@@ -1,5 +1,5 @@
 import django_tables2 as tables
-from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy as _
 
 from ipam.models import *
 from netbox.tables import NetBoxTable, columns
@@ -13,18 +13,18 @@ __all__ = (
 
 class ASNRangeTable(TenancyColumnsMixin, NetBoxTable):
     name = tables.Column(
+        verbose_name=_('Name'),
         linkify=True
     )
     rir = tables.Column(
+        verbose_name=_('RIR'),
         linkify=True
     )
     tags = columns.TagColumn(
         url_name='ipam:asnrange_list'
     )
-    asn_count = columns.LinkedCountColumn(
-        viewname='ipam:asn_list',
-        url_params={'asn_id': 'pk'},
-        verbose_name=_('ASN Count')
+    asn_count = tables.Column(
+        verbose_name=_('ASNs')
     )
 
     class Meta(NetBoxTable.Meta):
@@ -38,9 +38,11 @@ class ASNRangeTable(TenancyColumnsMixin, NetBoxTable):
 
 class ASNTable(TenancyColumnsMixin, NetBoxTable):
     asn = tables.Column(
+        verbose_name=_('ASN'),
         linkify=True
     )
     rir = tables.Column(
+        verbose_name=_('RIR'),
         linkify=True
     )
     asn_asdot = tables.Column(
@@ -59,9 +61,12 @@ class ASNTable(TenancyColumnsMixin, NetBoxTable):
         verbose_name=_('Provider Count')
     )
     sites = columns.ManyToManyColumn(
-        linkify_item=True
+        linkify_item=True,
+        verbose_name=_('Sites')
     )
-    comments = columns.MarkdownColumn()
+    comments = columns.MarkdownColumn(
+        verbose_name=_('Comments'),
+    )
     tags = columns.TagColumn(
         url_name='ipam:asn_list'
     )

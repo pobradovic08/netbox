@@ -167,6 +167,12 @@ table td > .progress {
   }
 }
 
+.alert {
+  code {
+    color: $gray-600;
+  }
+}
+
 span.profile-button .dropdown-menu {
   right: 0;
   left: auto;
@@ -1000,6 +1006,18 @@ div.card-overlay {
 .rendered-markdown td {
   border-top: 1px solid #dddddd;
   padding: 8px;
+}
+
+th[align="left"] {
+  text-align: left;
+}
+
+th[align="center"] {
+  text-align: center;
+}
+
+th[align="right"] {
+  text-align: right;
 }
 
 /* Markdown widget */

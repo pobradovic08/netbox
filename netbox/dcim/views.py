@@ -1,4 +1,5 @@
 import traceback
+from collections import defaultdict
 
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
@@ -45,6 +46,15 @@ CABLE_TERMINATION_TYPES = {
 
 
 class DeviceComponentsView(generic.ObjectChildrenView):
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename', 'bulk_disconnect')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+        'bulk_disconnect': {'change'},
+    })
     queryset = Device.objects.all()
 
     def get_children(self, request, parent):
@@ -112,16 +122,18 @@ class BulkDisconnectView(GetReturnURLMixin, ObjectPermissionRequiredMixin, View)
             if form.is_valid():
 
                 with transaction.atomic():
-
                     count = 0
+                    cable_ids = set()
                     for obj in self.queryset.filter(pk__in=form.cleaned_data['pk']):
-                        if obj.cable is None:
-                            continue
-                        obj.cable.delete()
-                        count += 1
+                        if obj.cable:
+                            cable_ids.add(obj.cable.pk)
+                            count += 1
+                    for cable in Cable.objects.filter(pk__in=cable_ids):
+                        cable.delete()
 
-                messages.success(request, "Disconnected {} {}".format(
-                    count, self.queryset.model._meta.verbose_name_plural
+                messages.success(request, _("Disconnected {count} {type}").format(
+                    count=count,
+                    type=self.queryset.model._meta.verbose_name_plural
                 ))
 
                 return redirect(return_url)
@@ -388,32 +400,8 @@ class SiteView(generic.ObjectView):
             (Circuit.objects.restrict(request.user, 'view').filter(terminations__site=instance).distinct(), 'site_id'),
         )
 
-        locations = Location.objects.add_related_count(
-            Location.objects.all(),
-            Rack,
-            'location',
-            'rack_count',
-            cumulative=True
-        )
-        locations = Location.objects.add_related_count(
-            locations,
-            Device,
-            'location',
-            'device_count',
-            cumulative=True
-        ).restrict(request.user, 'view').filter(site=instance)
-
-        nonracked_devices = Device.objects.filter(
-            site=instance,
-            rack__isnull=True,
-            parent_bay__isnull=True
-        ).prefetch_related('device_type__manufacturer', 'parent_bay', 'device_role')
-
         return {
             'related_models': related_models,
-            'locations': locations,
-            'nonracked_devices': nonracked_devices.order_by('-pk')[:10],
-            'total_nonracked_devices_count': nonracked_devices.count(),
         }
 
 
@@ -485,16 +473,8 @@ class LocationView(generic.ObjectView):
             (Device.objects.restrict(request.user, 'view').filter(location__in=locations), 'location_id'),
         )
 
-        nonracked_devices = Device.objects.filter(
-            location=instance,
-            rack__isnull=True,
-            parent_bay__isnull=True
-        ).prefetch_related('device_type__manufacturer', 'parent_bay', 'device_role')
-
         return {
             'related_models': related_models,
-            'nonracked_devices': nonracked_devices.order_by('-pk')[:10],
-            'total_nonracked_devices_count': nonracked_devices.count(),
         }
 
 
@@ -681,13 +661,6 @@ class RackView(generic.ObjectView):
             (PowerFeed.objects.restrict(request.user).filter(rack=instance), 'rack_id'),
         )
 
-        # Get 0U devices located within the rack
-        nonracked_devices = Device.objects.filter(
-            rack=instance,
-            position__isnull=True,
-            parent_bay__isnull=True
-        ).prefetch_related('device_type__manufacturer', 'parent_bay', 'device_role')
-
         peer_racks = Rack.objects.restrict(request.user, 'view').filter(site=instance.site)
 
         if instance.location:
@@ -704,7 +677,6 @@ class RackView(generic.ObjectView):
 
         return {
             'related_models': related_models,
-            'nonracked_devices': nonracked_devices,
             'next_rack': next_rack,
             'prev_rack': prev_rack,
             'svg_extra': svg_extra,
@@ -729,6 +701,26 @@ class RackRackReservationsView(generic.ObjectChildrenView):
 
     def get_children(self, request, parent):
         return parent.reservations.restrict(request.user, 'view')
+
+
+@register_model_view(Rack, 'nonracked_devices', 'nonracked-devices')
+class RackNonRackedView(generic.ObjectChildrenView):
+    queryset = Rack.objects.all()
+    child_model = Device
+    table = tables.DeviceTable
+    filterset = filtersets.DeviceFilterSet
+    template_name = 'dcim/rack/non_racked_devices.html'
+    tab = ViewTab(
+        label=_('Non-Racked Devices'),
+        badge=lambda obj: obj.devices.filter(rack=obj, position__isnull=True, parent_bay__isnull=True).count(),
+        weight=500,
+        permission='dcim.view_device',
+    )
+
+    def get_children(self, request, parent):
+        return parent.devices.restrict(request.user, 'view').filter(
+            rack=parent, position__isnull=True, parent_bay__isnull=True
+        )
 
 
 @register_model_view(Rack, 'edit')
@@ -951,7 +943,7 @@ class DeviceTypeConsolePortsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_consoleports'
     tab = ViewTab(
         label=_('Console Ports'),
-        badge=lambda obj: obj.consoleporttemplates.count(),
+        badge=lambda obj: obj.console_port_template_count,
         permission='dcim.view_consoleporttemplate',
         weight=550,
         hide_if_empty=True
@@ -966,7 +958,7 @@ class DeviceTypeConsoleServerPortsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_consoleserverports'
     tab = ViewTab(
         label=_('Console Server Ports'),
-        badge=lambda obj: obj.consoleserverporttemplates.count(),
+        badge=lambda obj: obj.console_server_port_template_count,
         permission='dcim.view_consoleserverporttemplate',
         weight=560,
         hide_if_empty=True
@@ -981,7 +973,7 @@ class DeviceTypePowerPortsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_powerports'
     tab = ViewTab(
         label=_('Power Ports'),
-        badge=lambda obj: obj.powerporttemplates.count(),
+        badge=lambda obj: obj.power_port_template_count,
         permission='dcim.view_powerporttemplate',
         weight=570,
         hide_if_empty=True
@@ -996,7 +988,7 @@ class DeviceTypePowerOutletsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_poweroutlets'
     tab = ViewTab(
         label=_('Power Outlets'),
-        badge=lambda obj: obj.poweroutlettemplates.count(),
+        badge=lambda obj: obj.power_outlet_template_count,
         permission='dcim.view_poweroutlettemplate',
         weight=580,
         hide_if_empty=True
@@ -1011,7 +1003,7 @@ class DeviceTypeInterfacesView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_interfaces'
     tab = ViewTab(
         label=_('Interfaces'),
-        badge=lambda obj: obj.interfacetemplates.count(),
+        badge=lambda obj: obj.interface_template_count,
         permission='dcim.view_interfacetemplate',
         weight=520,
         hide_if_empty=True
@@ -1026,7 +1018,7 @@ class DeviceTypeFrontPortsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_frontports'
     tab = ViewTab(
         label=_('Front Ports'),
-        badge=lambda obj: obj.frontporttemplates.count(),
+        badge=lambda obj: obj.front_port_template_count,
         permission='dcim.view_frontporttemplate',
         weight=530,
         hide_if_empty=True
@@ -1041,7 +1033,7 @@ class DeviceTypeRearPortsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_rearports'
     tab = ViewTab(
         label=_('Rear Ports'),
-        badge=lambda obj: obj.rearporttemplates.count(),
+        badge=lambda obj: obj.rear_port_template_count,
         permission='dcim.view_rearporttemplate',
         weight=540,
         hide_if_empty=True
@@ -1056,7 +1048,7 @@ class DeviceTypeModuleBaysView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_modulebays'
     tab = ViewTab(
         label=_('Module Bays'),
-        badge=lambda obj: obj.modulebaytemplates.count(),
+        badge=lambda obj: obj.module_bay_template_count,
         permission='dcim.view_modulebaytemplate',
         weight=510,
         hide_if_empty=True
@@ -1071,7 +1063,7 @@ class DeviceTypeDeviceBaysView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_devicebays'
     tab = ViewTab(
         label=_('Device Bays'),
-        badge=lambda obj: obj.devicebaytemplates.count(),
+        badge=lambda obj: obj.device_bay_template_count,
         permission='dcim.view_devicebaytemplate',
         weight=500,
         hide_if_empty=True
@@ -1086,7 +1078,7 @@ class DeviceTypeInventoryItemsView(DeviceTypeComponentsView):
     viewname = 'dcim:devicetype_inventoryitems'
     tab = ViewTab(
         label=_('Inventory Items'),
-        badge=lambda obj: obj.inventoryitemtemplates.count(),
+        badge=lambda obj: obj.inventory_item_template_count,
         permission='dcim.view_invenotryitemtemplate',
         weight=590,
         hide_if_empty=True
@@ -1709,7 +1701,7 @@ class InventoryItemTemplateBulkDeleteView(generic.BulkDeleteView):
 
 class DeviceRoleListView(generic.ObjectListView):
     queryset = DeviceRole.objects.annotate(
-        device_count=count_related(Device, 'device_role'),
+        device_count=count_related(Device, 'role'),
         vm_count=count_related(VirtualMachine, 'role')
     )
     filterset = filtersets.DeviceRoleFilterSet
@@ -1723,7 +1715,7 @@ class DeviceRoleView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         related_models = (
-            (Device.objects.restrict(request.user, 'view').filter(device_role=instance), 'role_id'),
+            (Device.objects.restrict(request.user, 'view').filter(role=instance), 'role_id'),
             (VirtualMachine.objects.restrict(request.user, 'view').filter(role=instance), 'role_id'),
         )
 
@@ -1750,7 +1742,7 @@ class DeviceRoleBulkImportView(generic.BulkImportView):
 
 class DeviceRoleBulkEditView(generic.BulkEditView):
     queryset = DeviceRole.objects.annotate(
-        device_count=count_related(Device, 'device_role'),
+        device_count=count_related(Device, 'role'),
         vm_count=count_related(VirtualMachine, 'role')
     )
     filterset = filtersets.DeviceRoleFilterSet
@@ -1760,7 +1752,7 @@ class DeviceRoleBulkEditView(generic.BulkEditView):
 
 class DeviceRoleBulkDeleteView(generic.BulkDeleteView):
     queryset = DeviceRole.objects.annotate(
-        device_count=count_related(Device, 'device_role'),
+        device_count=count_related(Device, 'role'),
         vm_count=count_related(VirtualMachine, 'role')
     )
     filterset = filtersets.DeviceRoleFilterSet
@@ -1876,7 +1868,7 @@ class DeviceConsolePortsView(DeviceComponentsView):
     template_name = 'dcim/device/consoleports.html',
     tab = ViewTab(
         label=_('Console Ports'),
-        badge=lambda obj: obj.consoleports.count(),
+        badge=lambda obj: obj.console_port_count,
         permission='dcim.view_consoleport',
         weight=550,
         hide_if_empty=True
@@ -1891,7 +1883,7 @@ class DeviceConsoleServerPortsView(DeviceComponentsView):
     template_name = 'dcim/device/consoleserverports.html'
     tab = ViewTab(
         label=_('Console Server Ports'),
-        badge=lambda obj: obj.consoleserverports.count(),
+        badge=lambda obj: obj.console_server_port_count,
         permission='dcim.view_consoleserverport',
         weight=560,
         hide_if_empty=True
@@ -1906,7 +1898,7 @@ class DevicePowerPortsView(DeviceComponentsView):
     template_name = 'dcim/device/powerports.html'
     tab = ViewTab(
         label=_('Power Ports'),
-        badge=lambda obj: obj.powerports.count(),
+        badge=lambda obj: obj.power_port_count,
         permission='dcim.view_powerport',
         weight=570,
         hide_if_empty=True
@@ -1921,7 +1913,7 @@ class DevicePowerOutletsView(DeviceComponentsView):
     template_name = 'dcim/device/poweroutlets.html'
     tab = ViewTab(
         label=_('Power Outlets'),
-        badge=lambda obj: obj.poweroutlets.count(),
+        badge=lambda obj: obj.power_outlet_count,
         permission='dcim.view_poweroutlet',
         weight=580,
         hide_if_empty=True
@@ -1957,7 +1949,7 @@ class DeviceFrontPortsView(DeviceComponentsView):
     template_name = 'dcim/device/frontports.html'
     tab = ViewTab(
         label=_('Front Ports'),
-        badge=lambda obj: obj.frontports.count(),
+        badge=lambda obj: obj.front_port_count,
         permission='dcim.view_frontport',
         weight=530,
         hide_if_empty=True
@@ -1972,7 +1964,7 @@ class DeviceRearPortsView(DeviceComponentsView):
     template_name = 'dcim/device/rearports.html'
     tab = ViewTab(
         label=_('Rear Ports'),
-        badge=lambda obj: obj.rearports.count(),
+        badge=lambda obj: obj.rear_port_count,
         permission='dcim.view_rearport',
         weight=540,
         hide_if_empty=True
@@ -1985,9 +1977,10 @@ class DeviceModuleBaysView(DeviceComponentsView):
     table = tables.DeviceModuleBayTable
     filterset = filtersets.ModuleBayFilterSet
     template_name = 'dcim/device/modulebays.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
     tab = ViewTab(
         label=_('Module Bays'),
-        badge=lambda obj: obj.modulebays.count(),
+        badge=lambda obj: obj.module_bay_count,
         permission='dcim.view_modulebay',
         weight=510,
         hide_if_empty=True
@@ -2000,9 +1993,10 @@ class DeviceDeviceBaysView(DeviceComponentsView):
     table = tables.DeviceDeviceBayTable
     filterset = filtersets.DeviceBayFilterSet
     template_name = 'dcim/device/devicebays.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
     tab = ViewTab(
         label=_('Device Bays'),
-        badge=lambda obj: obj.devicebays.count(),
+        badge=lambda obj: obj.device_bay_count,
         permission='dcim.view_devicebay',
         weight=500,
         hide_if_empty=True
@@ -2011,13 +2005,14 @@ class DeviceDeviceBaysView(DeviceComponentsView):
 
 @register_model_view(Device, 'inventory')
 class DeviceInventoryView(DeviceComponentsView):
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
     child_model = InventoryItem
     table = tables.DeviceInventoryItemTable
     filterset = filtersets.InventoryItemFilterSet
     template_name = 'dcim/device/inventory.html'
     tab = ViewTab(
         label=_('Inventory Items'),
-        badge=lambda obj: obj.inventoryitems.count(),
+        badge=lambda obj: obj.inventory_item_count,
         permission='dcim.view_inventoryitem',
         weight=590,
         hide_if_empty=True
@@ -2030,7 +2025,6 @@ class DeviceConfigContextView(ObjectConfigContextView):
     base_template = 'dcim/device/base.html'
     tab = ViewTab(
         label=_('Config Context'),
-        permission='extras.view_configcontext',
         weight=2000
     )
 
@@ -2041,7 +2035,6 @@ class DeviceRenderConfigView(generic.ObjectView):
     template_name = 'dcim/device/render_config.html'
     tab = ViewTab(
         label=_('Render Config'),
-        permission='extras.view_configtemplate',
         weight=2100
     )
 
@@ -2193,6 +2186,15 @@ class ConsolePortListView(generic.ObjectListView):
     filterset = filtersets.ConsolePortFilterSet
     filterset_form = forms.ConsolePortFilterForm
     table = tables.ConsolePortTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(ConsolePort)
@@ -2256,6 +2258,15 @@ class ConsoleServerPortListView(generic.ObjectListView):
     filterset = filtersets.ConsoleServerPortFilterSet
     filterset_form = forms.ConsoleServerPortFilterForm
     table = tables.ConsoleServerPortTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(ConsoleServerPort)
@@ -2319,6 +2330,15 @@ class PowerPortListView(generic.ObjectListView):
     filterset = filtersets.PowerPortFilterSet
     filterset_form = forms.PowerPortFilterForm
     table = tables.PowerPortTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(PowerPort)
@@ -2382,6 +2402,15 @@ class PowerOutletListView(generic.ObjectListView):
     filterset = filtersets.PowerOutletFilterSet
     filterset_form = forms.PowerOutletFilterForm
     table = tables.PowerOutletTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(PowerOutlet)
@@ -2445,6 +2474,15 @@ class InterfaceListView(generic.ObjectListView):
     filterset = filtersets.InterfaceFilterSet
     filterset_form = forms.InterfaceFilterForm
     table = tables.InterfaceTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(Interface)
@@ -2452,11 +2490,13 @@ class InterfaceView(generic.ObjectView):
     queryset = Interface.objects.all()
 
     def get_extra_context(self, request, instance):
-        # Get assigned VDC's
+        # Get assigned VDCs
         vdc_table = tables.VirtualDeviceContextTable(
             data=instance.vdcs.restrict(request.user, 'view').prefetch_related('device'),
-            exclude=('tenant', 'tenant_group', 'primary_ip', 'primary_ip4', 'primary_ip6', 'comments', 'tags',
-                     'created', 'last_updated', 'actions', ),
+            exclude=(
+                'tenant', 'tenant_group', 'primary_ip', 'primary_ip4', 'primary_ip6', 'oob_ip', 'comments', 'tags',
+                'created', 'last_updated', 'actions',
+            ),
             orderable=False
         )
 
@@ -2554,6 +2594,15 @@ class FrontPortListView(generic.ObjectListView):
     filterset = filtersets.FrontPortFilterSet
     filterset_form = forms.FrontPortFilterForm
     table = tables.FrontPortTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(FrontPort)
@@ -2617,6 +2666,15 @@ class RearPortListView(generic.ObjectListView):
     filterset = filtersets.RearPortFilterSet
     filterset_form = forms.RearPortFilterForm
     table = tables.RearPortTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(RearPort)
@@ -2680,6 +2738,15 @@ class ModuleBayListView(generic.ObjectListView):
     filterset = filtersets.ModuleBayFilterSet
     filterset_form = forms.ModuleBayFilterForm
     table = tables.ModuleBayTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(ModuleBay)
@@ -2735,6 +2802,15 @@ class DeviceBayListView(generic.ObjectListView):
     filterset = filtersets.DeviceBayFilterSet
     filterset_form = forms.DeviceBayFilterForm
     table = tables.DeviceBayTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(DeviceBay)
@@ -2859,6 +2935,15 @@ class InventoryItemListView(generic.ObjectListView):
     filterset = filtersets.InventoryItemFilterSet
     filterset_form = forms.InventoryItemFilterForm
     table = tables.InventoryItemTable
+    template_name = 'dcim/component_list.html'
+    actions = ('add', 'import', 'export', 'bulk_edit', 'bulk_delete', 'bulk_rename')
+    action_perms = defaultdict(set, **{
+        'add': {'add'},
+        'import': {'add'},
+        'bulk_edit': {'change'},
+        'bulk_delete': {'delete'},
+        'bulk_rename': {'change'},
+    })
 
 
 @register_model_view(InventoryItem)
@@ -3131,6 +3216,19 @@ class CableEditView(generic.ObjectEditView):
 
         return obj
 
+    def get_extra_addanother_params(self, request):
+
+        params = {
+            'a_terminations_type': request.GET.get('a_terminations_type'),
+            'b_terminations_type': request.GET.get('b_terminations_type')
+        }
+
+        for key in request.POST:
+            if 'device' in key or 'power_panel' in key or 'circuit' in key:
+                params.update({key: request.POST.get(key)})
+
+        return params
+
 
 @register_model_view(Cable, 'delete')
 class CableDeleteView(generic.ObjectDeleteView):
@@ -3212,9 +3310,7 @@ class InterfaceConnectionsListView(generic.ObjectListView):
 #
 
 class VirtualChassisListView(generic.ObjectListView):
-    queryset = VirtualChassis.objects.annotate(
-        member_count=count_related(Device, 'virtual_chassis')
-    )
+    queryset = VirtualChassis.objects.all()
     table = tables.VirtualChassisTable
     filterset = filtersets.VirtualChassisFilterSet
     filterset_form = forms.VirtualChassisFilterForm

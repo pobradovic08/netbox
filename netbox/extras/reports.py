@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 def get_module_and_report(module_name, report_name):
     module = ReportModule.objects.get(file_path=f'{module_name}.py')
-    report = module.reports.get(report_name)
+    report = module.reports.get(report_name)()
     return module, report
 
 
@@ -106,8 +106,6 @@ class Report(object):
                     'failure': 0,
                     'log': [],
                 }
-        if not test_methods:
-            raise Exception("A report must contain at least one test method.")
         self.test_methods = test_methods
 
     @classproperty
@@ -136,6 +134,13 @@ class Report(object):
     @property
     def source(self):
         return inspect.getsource(self.__class__)
+
+    @property
+    def is_valid(self):
+        """
+        Indicates whether the report can be run.
+        """
+        return bool(self.test_methods)
 
     #
     # Logging methods
@@ -214,20 +219,18 @@ class Report(object):
                 self.active_test = method_name
                 test_method = getattr(self, method_name)
                 test_method()
+            job.data = self._results
             if self.failed:
                 self.logger.warning("Report failed")
-                job.status = JobStatusChoices.STATUS_FAILED
+                job.terminate(status=JobStatusChoices.STATUS_FAILED)
             else:
                 self.logger.info("Report completed successfully")
-                job.status = JobStatusChoices.STATUS_COMPLETED
+                job.terminate()
         except Exception as e:
             stacktrace = traceback.format_exc()
             self.log_failure(None, f"An exception occurred: {type(e).__name__}: {e} <pre>{stacktrace}</pre>")
             logger.error(f"Exception raised during report execution: {e}")
             job.terminate(status=JobStatusChoices.STATUS_ERRORED)
-        finally:
-            job.data = self._results
-            job.terminate()
 
         # Perform any post-run tasks
         self.post_run()

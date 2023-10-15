@@ -10,19 +10,21 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.cache import cache
 from django.db.models import Q
-from django.http import QueryDict
 from django.template.loader import render_to_string
 from django.urls import NoReverseMatch, resolve, reverse
 from django.utils.translation import gettext as _
 
+from extras.choices import BookmarkOrderingChoices
 from extras.utils import FeatureQuery
+from utilities.choices import ButtonColorChoices
 from utilities.forms import BootstrapMixin
 from utilities.permissions import get_permission_for_model
 from utilities.templatetags.builtins.filters import render_markdown
-from utilities.utils import content_type_identifier, content_type_name, get_viewname
+from utilities.utils import content_type_identifier, content_type_name, dict_to_querydict, get_viewname
 from .utils import register_widget
 
 __all__ = (
+    'BookmarksWidget',
     'DashboardWidget',
     'NoteWidget',
     'ObjectCountsWidget',
@@ -115,6 +117,22 @@ class DashboardWidget:
         return f'{self.__class__.__module__.split(".")[0]}.{self.__class__.__name__}'
 
     @property
+    def fg_color(self):
+        """
+        Return the appropriate foreground (text) color for the widget's color.
+        """
+        if self.color in (
+            ButtonColorChoices.CYAN,
+            ButtonColorChoices.GRAY,
+            ButtonColorChoices.GREY,
+            ButtonColorChoices.TEAL,
+            ButtonColorChoices.WHITE,
+            ButtonColorChoices.YELLOW,
+        ):
+            return ButtonColorChoices.BLACK
+        return ButtonColorChoices.WHITE
+
+    @property
     def form_data(self):
         return {
             'title': self.title,
@@ -170,8 +188,7 @@ class ObjectCountsWidget(DashboardWidget):
                 qs = model.objects.restrict(request.user, 'view')
                 # Apply any specified filters
                 if filters := self.config.get('filters'):
-                    params = QueryDict(mutable=True)
-                    params.update(filters)
+                    params = dict_to_querydict(filters)
                     filterset = getattr(resolve(url).func.view_class, 'filterset', None)
                     qs = filterset(params, qs).qs
                     url = f'{url}?{params.urlencode()}'
@@ -318,3 +335,45 @@ class RSSFeedWidget(DashboardWidget):
         return {
             'feed': feed,
         }
+
+
+@register_widget
+class BookmarksWidget(DashboardWidget):
+    default_title = _('Bookmarks')
+    default_config = {
+        'order_by': BookmarkOrderingChoices.ORDERING_NEWEST,
+    }
+    description = _('Show your personal bookmarks')
+    template_name = 'extras/dashboard/widgets/bookmarks.html'
+
+    class ConfigForm(WidgetConfigForm):
+        object_types = forms.MultipleChoiceField(
+            # TODO: Restrict the choices by FeatureQuery('bookmarks')
+            choices=get_content_type_labels,
+            required=False
+        )
+        order_by = forms.ChoiceField(
+            choices=BookmarkOrderingChoices
+        )
+        max_items = forms.IntegerField(
+            min_value=1,
+            required=False
+        )
+
+    def render(self, request):
+        from extras.models import Bookmark
+
+        if request.user.is_anonymous:
+            bookmarks = list()
+        else:
+            bookmarks = Bookmark.objects.filter(user=request.user).order_by(self.config['order_by'])
+            if object_types := self.config.get('object_types'):
+                models = get_models_from_content_types(object_types)
+                conent_types = ContentType.objects.get_for_models(*models).values()
+                bookmarks = bookmarks.filter(object_type__in=conent_types)
+            if max_items := self.config.get('max_items'):
+                bookmarks = bookmarks[:max_items]
+
+        return render_to_string(self.template_name, {
+            'bookmarks': bookmarks,
+        })
