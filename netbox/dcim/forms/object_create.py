@@ -3,8 +3,11 @@ from django.utils.translation import gettext_lazy as _
 
 from dcim.models import *
 from netbox.forms import NetBoxModelForm
+from netbox.forms.mixins import OwnerMixin
 from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField, ExpandableNameField
+from utilities.forms.rendering import FieldSet, TabbedGroups
 from utilities.forms.widgets import APISelect
+
 from . import model_forms
 
 __all__ = (
@@ -54,19 +57,23 @@ class ComponentCreateForm(forms.Form):
     def clean(self):
         super().clean()
 
-        # Validate that all replication fields generate an equal number of values
+        # Validate that all replication fields generate an equal number of values (or a single value)
         if not (patterns := self.cleaned_data.get(self.replication_fields[0])):
             return
-
         pattern_count = len(patterns)
         for field_name in self.replication_fields:
             value_count = len(self.cleaned_data[field_name])
-            if self.cleaned_data[field_name] and value_count != pattern_count:
-                raise forms.ValidationError({
-                    field_name: _(
-                        "The provided pattern specifies {value_count} values, but {pattern_count} are expected."
-                    ).format(value_count=value_count, pattern_count=pattern_count)
-                }, code='label_pattern_mismatch')
+            if self.cleaned_data[field_name]:
+                if value_count == 1:
+                    # If the field resolves to a single value (because no pattern was used), multiply it by the number
+                    # of expected values. This allows us to reuse the same label when creating multiple components.
+                    self.cleaned_data[field_name] = self.cleaned_data[field_name] * pattern_count
+                elif value_count != pattern_count:
+                    raise forms.ValidationError({
+                        field_name: _(
+                            "The provided pattern specifies {value_count} values, but {pattern_count} are expected."
+                        ).format(value_count=value_count, pattern_count=pattern_count)
+                    }, code='label_pattern_mismatch')
 
 
 #
@@ -104,61 +111,30 @@ class InterfaceTemplateCreateForm(ComponentCreateForm, model_forms.InterfaceTemp
 
 
 class FrontPortTemplateCreateForm(ComponentCreateForm, model_forms.FrontPortTemplateForm):
-    rear_port = forms.MultipleChoiceField(
-        choices=[],
-        label=_('Rear ports'),
-        help_text=_('Select one rear port assignment for each front port being created.'),
-        widget=forms.SelectMultiple(attrs={'size': 6})
-    )
 
-    # Override fieldsets from FrontPortTemplateForm to omit rear_port_position
+    # Override fieldsets from FrontPortTemplateForm
     fieldsets = (
-        (None, ('device_type', 'module_type', 'name', 'label', 'type', 'color', 'rear_port', 'description')),
+        FieldSet(
+            TabbedGroups(
+                FieldSet('device_type', name=_('Device Type')),
+                FieldSet('module_type', name=_('Module Type')),
+            ),
+            'name', 'label', 'type', 'color', 'positions', 'rear_ports', 'description',
+        ),
     )
 
-    class Meta(model_forms.FrontPortTemplateForm.Meta):
-        exclude = ('name', 'label', 'rear_port', 'rear_port_position')
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # TODO: This needs better validation
-        if 'device_type' in self.initial or self.data.get('device_type'):
-            parent = DeviceType.objects.get(
-                pk=self.initial.get('device_type') or self.data.get('device_type')
-            )
-        elif 'module_type' in self.initial or self.data.get('module_type'):
-            parent = ModuleType.objects.get(
-                pk=self.initial.get('module_type') or self.data.get('module_type')
-            )
-        else:
-            return
-
-        # Determine which rear port positions are occupied. These will be excluded from the list of available mappings.
-        occupied_port_positions = [
-            (front_port.rear_port_id, front_port.rear_port_position)
-            for front_port in parent.frontporttemplates.all()
-        ]
-
-        # Populate rear port choices
-        choices = []
-        rear_ports = parent.rearporttemplates.all()
-        for rear_port in rear_ports:
-            for i in range(1, rear_port.positions + 1):
-                if (rear_port.pk, i) not in occupied_port_positions:
-                    choices.append(
-                        ('{}:{}'.format(rear_port.pk, i), '{}:{}'.format(rear_port.name, i))
-                    )
-        self.fields['rear_port'].choices = choices
+    class Meta:
+        model = FrontPortTemplate
+        fields = (
+            'device_type', 'module_type', 'type', 'color', 'positions', 'description',
+        )
 
     def get_iterative_data(self, iteration):
-
-        # Assign rear port and position from selected set
-        rear_port, position = self.cleaned_data['rear_port'][iteration].split(':')
+        positions = self.cleaned_data['positions']
+        offset = positions * iteration
 
         return {
-            'rear_port': int(rear_port),
-            'rear_port_position': int(position),
+            'rear_ports': self.cleaned_data['rear_ports'][offset:offset + positions]
         }
 
 
@@ -225,14 +201,6 @@ class InterfaceCreateForm(ComponentCreateForm, model_forms.InterfaceForm):
     class Meta(model_forms.InterfaceForm.Meta):
         exclude = ('name', 'label')
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        if 'module' in self.fields:
-            self.fields['name'].help_text += _(
-                "The string <code>{module}</code> will be replaced with the position of the assigned module, if any."
-            )
-
 
 class FrontPortCreateForm(ComponentCreateForm, model_forms.FrontPortForm):
     device = DynamicModelChoiceField(
@@ -243,62 +211,31 @@ class FrontPortCreateForm(ComponentCreateForm, model_forms.FrontPortForm):
             # TODO: Clean up the application of HTMXSelect attributes
             attrs={
                 'hx-get': '.',
-                'hx-include': f'#form_fields',
-                'hx-target': f'#form_fields',
+                'hx-include': '#form_fields',
+                'hx-target': '#form_fields',
             }
         )
-    )
-    rear_port = forms.MultipleChoiceField(
-        choices=[],
-        label=_('Rear ports'),
-        help_text=_('Select one rear port assignment for each front port being created.'),
-        widget=forms.SelectMultiple(attrs={'size': 6})
     )
 
     # Override fieldsets from FrontPortForm to omit rear_port_position
     fieldsets = (
-        (None, (
-            'device', 'module', 'name', 'label', 'type', 'color', 'rear_port', 'mark_connected', 'description', 'tags',
-        )),
+        FieldSet(
+            'device', 'module', 'name', 'label', 'type', 'color', 'positions', 'rear_ports', 'mark_connected',
+            'description', 'tags',
+        ),
     )
 
-    class Meta(model_forms.FrontPortForm.Meta):
-        exclude = ('name', 'label', 'rear_port', 'rear_port_position')
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        if device_id := self.data.get('device') or self.initial.get('device'):
-            device = Device.objects.get(pk=device_id)
-        else:
-            return
-
-        # Determine which rear port positions are occupied. These will be excluded from the list of available
-        # mappings.
-        occupied_port_positions = [
-            (front_port.rear_port_id, front_port.rear_port_position)
-            for front_port in device.frontports.all()
+    class Meta:
+        model = FrontPort
+        fields = [
+            'device', 'module', 'type', 'color', 'positions', 'mark_connected', 'description', 'owner', 'tags',
         ]
 
-        # Populate rear port choices
-        choices = []
-        rear_ports = RearPort.objects.filter(device=device)
-        for rear_port in rear_ports:
-            for i in range(1, rear_port.positions + 1):
-                if (rear_port.pk, i) not in occupied_port_positions:
-                    choices.append(
-                        ('{}:{}'.format(rear_port.pk, i), '{}:{}'.format(rear_port.name, i))
-                    )
-        self.fields['rear_port'].choices = choices
-
     def get_iterative_data(self, iteration):
-
-        # Assign rear port and position from selected set
-        rear_port, position = self.cleaned_data['rear_port'][iteration].split(':')
-
+        positions = self.cleaned_data['positions']
+        offset = positions * iteration
         return {
-            'rear_port': int(rear_port),
-            'rear_port_position': int(position),
+            'rear_ports': self.cleaned_data['rear_ports'][offset:offset + positions]
         }
 
 
@@ -336,7 +273,7 @@ class InventoryItemCreateForm(ComponentCreateForm, model_forms.InventoryItemForm
 # Virtual chassis
 #
 
-class VirtualChassisCreateForm(NetBoxModelForm):
+class VirtualChassisCreateForm(OwnerMixin, NetBoxModelForm):
     region = DynamicModelChoiceField(
         label=_('Region'),
         queryset=Region.objects.all(),
@@ -376,6 +313,7 @@ class VirtualChassisCreateForm(NetBoxModelForm):
         queryset=Device.objects.all(),
         required=False,
         query_params={
+            'virtual_chassis_id': 'null',
             'site_id': '$site',
             'rack_id': '$rack',
         }
@@ -387,10 +325,16 @@ class VirtualChassisCreateForm(NetBoxModelForm):
         help_text=_('Position of the first member device. Increases by one for each additional member.')
     )
 
+    fieldsets = (
+        FieldSet('name', 'domain', 'description', 'tags', name=_('Virtual Chassis')),
+        FieldSet('region', 'site_group', 'site', 'rack', 'members', 'initial_position', name=_('Member Devices')),
+    )
+
     class Meta:
         model = VirtualChassis
         fields = [
-            'name', 'domain', 'description', 'region', 'site_group', 'site', 'rack', 'members', 'initial_position', 'tags',
+            'name', 'domain', 'description', 'region', 'site_group', 'site', 'rack', 'owner', 'members',
+            'initial_position', 'tags',
         ]
 
     def clean(self):
@@ -408,6 +352,7 @@ class VirtualChassisCreateForm(NetBoxModelForm):
         if instance.pk and self.cleaned_data['members']:
             initial_position = self.cleaned_data.get('initial_position', 1)
             for i, member in enumerate(self.cleaned_data['members'], start=initial_position):
+                member.snapshot()
                 member.virtual_chassis = instance
                 member.vc_position = i
                 member.save()

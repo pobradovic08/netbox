@@ -21,6 +21,13 @@ The VM's operational status.
 !!! tip
     Additional statuses may be defined by setting `VirtualMachine.status` under the [`FIELD_CHOICES`](../../configuration/data-validation.md#field_choices) configuration parameter.
 
+### Start on boot
+
+The start on boot setting from the hypervisor.
+
+!!! tip
+    Additional statuses may be defined by setting `VirtualMachine.start_on_boot` under the [`FIELD_CHOICES`](../../configuration/data-validation.md#field_choices) configuration parameter.
+
 ### Site & Cluster
 
 The [site](../dcim/site.md) and/or [cluster](./cluster.md) to which the VM is assigned.
@@ -50,4 +57,11 @@ The amount of running memory provisioned, in megabytes.
 
 ### Disk
 
-The amount of disk storage provisioned, in gigabytes.
+The amount of disk storage provisioned, in megabytes.
+
+!!! warning
+    This field may be directly modified only on virtual machines which do not define discrete [virtual disks](./virtualdisk.md). Otherwise, it will report the sum of all attached disks.
+
+### Serial Number
+
+Optional serial number assigned to this virtual machine. Unlike devices, uniqueness is not enforced for virtual machine serial numbers.

@@ -5,19 +5,27 @@ import re
 import yaml
 from django import template
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.humanize.templatetags.humanize import naturalday, naturaltime
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
+from django.utils.timezone import localtime
 from markdown import markdown
+from markdown.extensions.tables import TableExtension
 
 from netbox.config import get_config
+from utilities.html import clean_html, foreground_color
 from utilities.markdown import StrikethroughExtension
-from utilities.utils import clean_html, foreground_color, title
+from utilities.string import title
 
 __all__ = (
     'bettertitle',
     'content_type',
     'content_type_id',
     'fgcolor',
+    'getattr_',
+    'isodate',
+    'isodatetime',
+    'isotime',
     'linkify',
     'meta',
     'placeholder',
@@ -52,7 +60,7 @@ def linkify(instance, attr=None):
         url = instance.get_absolute_url()
         return mark_safe(f'<a href="{url}">{escape(text)}</a>')
     except (AttributeError, TypeError):
-        return text
+        return escape(text)
 
 
 @register.filter()
@@ -79,6 +87,14 @@ def fgcolor(value, dark='000000', light='ffffff'):
     if not re.match('^[0-9a-f]{6}$', value):
         return ''
     return f'#{foreground_color(value, dark, light)}'
+
+
+@register.filter('getattr')
+def getattr_(instance, name):
+    """
+    Call getattr() on the object for the specified attribute.
+    """
+    return getattr(instance, name, None)
 
 
 @register.filter()
@@ -163,7 +179,12 @@ def render_markdown(value):
         return ''
 
     # Render Markdown
-    html = markdown(value, extensions=['def_list', 'fenced_code', 'tables', StrikethroughExtension()])
+    html = markdown(value, extensions=[
+        'def_list',
+        'fenced_code',
+        StrikethroughExtension(),
+        TableExtension(use_align_attribute=True),
+    ])
 
     # If the string is not empty wrap it in rendered-markdown to style tables
     if html:
@@ -195,3 +216,51 @@ def render_yaml(value):
         {{ data_dict|yaml }}
     """
     return yaml.dump(json.loads(json.dumps(value)))
+
+
+#
+# Time & date
+#
+
+@register.filter()
+def isodate(value):
+    if type(value) is datetime.date:
+        text = value.isoformat()
+        return mark_safe(f'<span title="{naturalday(value)}">{text}</span>')
+    if type(value) is datetime.datetime:
+        local_value = localtime(value) if value.tzinfo else value
+        text = local_value.date().isoformat()
+        return mark_safe(f'<span title="{naturaltime(value)}">{text}</span>')
+    return ''
+
+
+@register.filter()
+def isotime(value, spec='seconds'):
+    if type(value) is datetime.time:
+        return value.isoformat(timespec=spec)
+    if type(value) is datetime.datetime:
+        local_value = localtime(value) if value.tzinfo else value
+        return local_value.time().isoformat(timespec=spec)
+    return ''
+
+
+@register.filter()
+def isodatetime(value, spec='seconds'):
+    if type(value) is datetime.datetime:
+        text = f'{isodate(value)} {isotime(value, spec=spec)}'
+    else:
+        return ''
+    return mark_safe(f'<span title="{naturaltime(value)}">{text}</span>')
+
+
+@register.filter
+def truncate_middle(value, length):
+    if len(value) <= length:
+        return value
+
+    # Calculate split points for the two parts
+    half_len = (length - 1) // 2  # 1 for the ellipsis
+    first_part = value[:half_len]
+    second_part = value[len(value) - (length - 1 - half_len):]
+
+    return mark_safe(f"{first_part}&hellip;{second_part}")

@@ -39,7 +39,7 @@ When rendered for a specific NetBox device, the template's `device` variable wil
 
 ### Context Data
 
-The objet for which the configuration is being rendered is made available as template context as `device` or `virtualmachine` for devices and virtual machines, respectively. Additionally, NetBox model classes can be accessed by the app or plugin in which they reside. For example:
+The object for which the configuration is being rendered is made available as template context as `device` or `virtualmachine` for devices and virtual machines, respectively. Additionally, NetBox model classes can be accessed by the app or plugin in which they reside. For example:
 
 ```
 There are {{ dcim.Site.objects.count() }} sites.
@@ -70,6 +70,11 @@ This request will trigger resolution of the device's preferred config template i
 
 If no config template has been assigned to any of these three objects, the request will fail.
 
+The configuration can be rendered as JSON or as plaintext by setting the `Accept:` HTTP header. For example:
+
+* `Accept: application/json`
+* `Accept: text/plain`
+
 ### General Purpose Use
 
 NetBox config templates can also be rendered without being tied to any specific device, using a separate general purpose REST API endpoint. Any data included with a POST request to this endpoint will be passed as context data for the template.
@@ -85,3 +90,10 @@ http://netbox:8000/api/extras/config-templates/123/render/ \
   "bar": 123
 }'
 ```
+
+!!! note "Permissions"
+    Rendering configuration templates via the REST API requires appropriate permissions for the relevant object type:
+
+    * To render a device's configuration via `/api/dcim/devices/{id}/render-config/`, assign a permission for "DCIM > Device" with the `render_config` action.
+    * To render a virtual machine's configuration via `/api/virtualization/virtual-machines/{id}/render-config/`, assign a permission for "Virtualization > Virtual Machine" with the `render_config` action.
+    * To render a config template directly via `/api/extras/config-templates/{id}/render/`, assign a permission for "Extras > Config Template" with the `render` action.

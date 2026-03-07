@@ -1,14 +1,21 @@
+import logging
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
+
 from django import template
-from django.http import QueryDict
+from django.templatetags.static import static
+from django.utils.safestring import mark_safe
 
 from extras.choices import CustomFieldTypeChoices
-from utilities.utils import dict_to_querydict
+from utilities.querydict import dict_to_querydict
 
 __all__ = (
     'badge',
     'checkmark',
     'copy_content',
     'customfield_value',
+    'formaction',
+    'htmx_table',
+    'static_with_params',
     'tag',
 )
 
@@ -87,13 +94,14 @@ def checkmark(value, show_false=True, true='Yes', false='No'):
 
 
 @register.inclusion_tag('builtins/copy_content.html')
-def copy_content(target, prefix=None, color='primary'):
+def copy_content(target, prefix=None, color='primary', classes=None):
     """
     Display a copy button to copy the content of a field.
     """
     return {
         'target': f'#{prefix or ""}{target}',
-        'color': f'btn-{color}'
+        'color': f'btn-{color}',
+        'classes': classes or '',
     }
 
 
@@ -113,3 +121,70 @@ def htmx_table(context, viewname, return_url=None, **kwargs):
         'viewname': viewname,
         'url_params': url_params,
     }
+
+
+@register.simple_tag(takes_context=True)
+def formaction(context):
+    """
+    A hook for overriding the 'formaction' attribute on an HTML element, for example to replace
+    with 'hx-push-url="true" hx-post' for HTMX navigation.
+    """
+    return 'formaction'
+
+
+@register.simple_tag
+def static_with_params(path, **params):
+    """
+    Generate a static URL with properly appended query parameters.
+
+    The original Django static tag doesn't properly handle appending new parameters to URLs
+    that already contain query parameters, which can result in malformed URLs with double
+    question marks. This template tag handles the case where static files are served from
+    AWS S3 or other CDNs that automatically append query parameters to URLs.
+
+    This implementation correctly appends new parameters to existing URLs and checks for
+    parameter conflicts. A warning will be logged if any of the provided parameters
+    conflict with existing parameters in the URL.
+
+    Args:
+        path: The static file path (e.g., 'setmode.js')
+        **params: Query parameters to append (e.g., v='4.3.1')
+
+    Returns:
+        A properly formatted URL with query parameters.
+
+    Note:
+        If any provided parameters conflict with existing URL parameters, a warning
+        will be logged and the new parameter value will override the existing one.
+    """
+    # Get the base static URL
+    static_url = static(path)
+
+    # Parse the URL to extract existing query parameters
+    parsed = urlparse(static_url)
+    existing_params = parse_qs(parsed.query)
+
+    # Check for duplicate parameters and log warnings
+    logger = logging.getLogger('netbox.utilities.templatetags.tags')
+    for key, value in params.items():
+        if key in existing_params:
+            logger.warning(
+                f"Parameter '{key}' already exists in static URL '{static_url}' "
+                f"with value(s) {existing_params[key]}, overwriting with '{value}'"
+            )
+        existing_params[key] = [str(value)]
+
+    # Rebuild the query string
+    new_query = urlencode(existing_params, doseq=True)
+
+    # Reconstruct the URL with the new query string
+    new_parsed = parsed._replace(query=new_query)
+    return urlunparse(new_parsed)
+
+
+@register.simple_tag(takes_context=True)
+def render(context, component):
+    """
+    Render a UI component (e.g. a Panel) by calling its render() method and passing the current template context.
+    """
+    return mark_safe(component.render(context))

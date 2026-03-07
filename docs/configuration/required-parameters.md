@@ -2,12 +2,12 @@
 
 ## ALLOWED_HOSTS
 
-This is a list of valid fully-qualified domain names (FQDNs) and/or IP addresses that can be used to reach the NetBox service. Usually this is the same as the hostname for the NetBox server, but can also be different; for example, when using a reverse proxy serving the NetBox website under a different FQDN than the hostname of the NetBox server. To help guard against [HTTP Host header attackes](https://docs.djangoproject.com/en/3.0/topics/security/#host-headers-virtual-hosting), NetBox will not permit access to the server via any other hostnames (or IPs).
+This is a list of valid fully-qualified domain names (FQDNs) and/or IP addresses that can be used to reach the NetBox service. Usually this is the same as the hostname for the NetBox server, but can also be different; for example, when using a reverse proxy serving the NetBox website under a different FQDN than the hostname of the NetBox server. To help guard against [HTTP Host header attacks](https://docs.djangoproject.com/en/stable/topics/security/#host-headers-virtual-hosting), NetBox will not permit access to the server via any other hostnames (or IPs).
 
 !!! note
     This parameter must always be defined as a list or tuple, even if only a single value is provided.
 
-The value of this option is also used to set `CSRF_TRUSTED_ORIGINS`, which restricts POST requests to the same set of hosts (more about this [here](https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-CSRF_TRUSTED_ORIGINS)). Keep in mind that NetBox, by default, sets `USE_X_FORWARDED_HOST` to true, which means that if you're using a reverse proxy, it's the FQDN used to reach that reverse proxy which needs to be in this list (more about this [here](https://docs.djangoproject.com/en/stable/ref/settings/#allowed-hosts)).
+The value of this option is also used to set `CSRF_TRUSTED_ORIGINS`, which restricts POST requests to the same set of hosts (more about this [here](https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-CSRF_TRUSTED_ORIGINS)). Keep in mind that NetBox, by default, sets `USE_X_FORWARDED_HOST` to `True`, which means that if you're using a reverse proxy, it's the FQDN used to reach that reverse proxy which needs to be in this list (more about this [here](https://docs.djangoproject.com/en/stable/ref/settings/#allowed-hosts)).
 
 Example:
 
@@ -23,9 +23,55 @@ ALLOWED_HOSTS = ['*']
 
 ---
 
+## API_TOKEN_PEPPERS
+
+!!! info "This parameter was introduced in NetBox v4.5."
+
+[Cryptographic peppers](https://en.wikipedia.org/wiki/Pepper_(cryptography)) are employed to generate hashes of sensitive values on the server. This parameter defines the peppers used to hash v2 API tokens in NetBox. You must define at least one pepper before creating a v2 API token. See the [API documentation](../integrations/rest-api.md#authentication) for further information about how peppers are used.
+
+```python
+API_TOKEN_PEPPERS = {
+    # DO NOT USE THIS EXAMPLE PEPPER IN PRODUCTION
+    1: 'kp7ht*76fiQAhUi5dHfASLlYUE_S^gI^(7J^K5M!LfoH@vl&b_',
+}
+```
+
+!!! warning "Peppers are sensitive"
+    Treat pepper values as extremely sensitive. Consider populating peppers from environment variables at initialization time rather than defining them in the configuration file, if feasible. 
+
+Peppers must be at least 50 characters in length and should comprise a random string with a diverse character set. Consider using the Python script at `$INSTALL_ROOT/netbox/generate_secret_key.py` to generate a pepper value.
+
+It is recommended to start with a pepper ID of `1`. Additional peppers can be introduced later as needed to begin rotating token hashes.
+
+!!! tip
+    Although NetBox will run without `API_TOKEN_PEPPERS` defined, the use of v2 API tokens will be unavailable.
+
+---
+
 ## DATABASE
 
-NetBox requires access to a PostgreSQL 12 or later database service to store data. This service can run locally on the NetBox server or on a remote system. The following parameters must be defined within the `DATABASE` dictionary:
+!!! warning "Legacy Configuration Parameter"
+    The `DATABASE` configuration parameter is deprecated and will be removed in a future release. Users are advised to adopt the new `DATABASES` (plural) parameter, which allows for the configuration of multiple databases.
+
+See the [`DATABASES`](#databases) configuration below for usage.
+
+---
+
+## DATABASES
+
+NetBox requires access to a PostgreSQL 14 or later database service to store data. This service can run locally on the NetBox server or on a remote system. Databases are defined as named dictionaries:
+
+```python
+DATABASES = {
+    'default': {...},
+    'external1': {...},
+    'external2': {...},
+}
+```
+
+NetBox itself requires only that a `default` database is defined. However, certain plugins may require the configuration of additional databases. (Consider also configuring the [`DATABASE_ROUTERS`](./system.md#database_routers) parameter when multiple databases are in use.)
+
+The following parameters must be defined for each database:
 
 * `NAME` - Database name
 * `USER` - PostgreSQL username
@@ -38,14 +84,16 @@ NetBox requires access to a PostgreSQL 12 or later database service to store dat
 Example:
 
 ```python
-DATABASE = {
-    'ENGINE': 'django.db.backends.postgresql',
-    'NAME': 'netbox',               # Database name
-    'USER': 'netbox',               # PostgreSQL username
-    'PASSWORD': 'J5brHrAXFLQSif0K', # PostgreSQL password
-    'HOST': 'localhost',            # Database server
-    'PORT': '',                     # Database port (leave blank for default)
-    'CONN_MAX_AGE': 300,            # Max database connection age
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'netbox',               # Database name
+        'USER': 'netbox',               # PostgreSQL username
+        'PASSWORD': 'J5brHrAXFLQSif0K', # PostgreSQL password
+        'HOST': 'localhost',            # Database server
+        'PORT': '',                     # Database port (leave blank for default)
+        'CONN_MAX_AGE': 300,            # Max database connection age
+    }
 }
 ```
 
@@ -53,16 +101,13 @@ DATABASE = {
     NetBox supports all PostgreSQL database options supported by the underlying Django framework. For a complete list of available parameters, please see [the Django documentation](https://docs.djangoproject.com/en/stable/ref/settings/#databases).
 
 !!! warning
-    Make sure to use a PostgreSQL-compatible backend for the ENGINE setting. If you don't specify an ENGINE, the default will be django.db.backends.postgresql.
+    The `ENGINE` parameter must specify a PostgreSQL-compatible database backend. If not defined, the default engine `django.db.backends.postgresql` will be used.
 
 ---
 
 ## REDIS
 
-[Redis](https://redis.io/) is an in-memory data store similar to memcached. While Redis has been an optional component of
-NetBox since the introduction of webhooks in version 2.4, it is required starting in 2.6 to support NetBox's caching
-functionality (as well as other planned features). In 2.7, the connection settings were broken down into two sections for
-task queuing and caching, allowing the user to connect to different Redis instances/databases per feature.
+[Redis](https://redis.io/) is a lightweight in-memory data store similar to memcached. NetBox employs Redis for background task queuing and other features.
 
 Redis is configured using a configuration setting similar to `DATABASE` and these settings are the same for both of the `tasks` and `caching` subsections:
 
@@ -81,7 +126,7 @@ REDIS = {
     'tasks': {
         'HOST': 'redis.example.com',
         'PORT': 1234,
-        'USERNAME': 'netbox'
+        'USERNAME': 'netbox',
         'PASSWORD': 'foobar',
         'DATABASE': 0,
         'SSL': False,
@@ -89,7 +134,7 @@ REDIS = {
     'caching': {
         'HOST': 'localhost',
         'PORT': 6379,
-        'USERNAME': ''
+        'USERNAME': '',
         'PASSWORD': '',
         'DATABASE': 1,
         'SSL': False,
@@ -97,14 +142,24 @@ REDIS = {
 }
 ```
 
-!!! note
-    If you are upgrading from a NetBox release older than v2.7.0, please note that the Redis connection configuration
-    settings have changed. Manual modification to bring the `REDIS` section inline with the above specification is
-    necessary
-
 !!! warning
     It is highly recommended to keep the task and cache databases separate. Using the same database number on the
     same Redis instance for both may result in queued background tasks being lost during cache flushing events.
+
+### UNIX Socket Support
+
+Redis may alternatively be configured by specifying a complete URL instead of individual components. This approach supports the use of a UNIX socket connection. For example:
+
+```python
+REDIS = {
+    'tasks': {
+        'URL': 'unix:///run/redis-netbox/redis.sock?db=0'
+    },
+    'caching': {
+        'URL': 'unix:///run/redis-netbox/redis.sock?db=1'
+    },
+}
+```
 
 ### Using Redis Sentinel
 
@@ -144,6 +199,48 @@ REDIS = {
 
 !!! note
     It is permissible to use Sentinel for only one database and not the other.
+
+### SSL Configuration
+
+If you need to configure SSL/TLS for Redis beyond the basic `SSL`, `CA_CERT_PATH`, and `INSECURE_SKIP_TLS_VERIFY` options (for example, client certificates, a specific TLS version, or custom ciphers), you can pass additional parameters via the `KWARGS` key in either the `tasks` or `caching` subsection.
+
+NetBox already maps `CA_CERT_PATH` to `ssl_ca_certs` and (for caching) `INSECURE_SKIP_TLS_VERIFY` to `ssl_cert_reqs`; only add `KWARGS` when you need to override or extend those settings (for example, to supply client certificates or restrict TLS version or ciphers).
+
+* `KWARGS` - Optional dictionary of additional SSL/TLS (or other) parameters passed to the Redis client. These are passed directly to the underlying Redis client: for `tasks` to [redis-py](https://redis-py.readthedocs.io/en/stable/connections.html), and for `caching` to the [django-redis](https://github.com/jazzband/django-redis#configure-as-cache-backend) connection pool.
+
+Example:
+
+```python
+REDIS = {
+    'tasks': {
+        'HOST': 'redis.example.com',
+        'PORT': 1234,
+        'SSL': True,
+        'CA_CERT_PATH': '/etc/ssl/certs/ca.crt',
+        'KWARGS': {
+            'ssl_certfile': '/path/to/client-cert.pem',
+            'ssl_keyfile': '/path/to/client-key.pem',
+            'ssl_min_version': ssl.TLSVersion.TLSv1_2,
+            'ssl_ciphers': 'HIGH:!aNULL',
+        },
+    },
+    'caching': {
+        'HOST': 'redis.example.com',
+        'PORT': 1234,
+        'SSL': True,
+        'CA_CERT_PATH': '/etc/ssl/certs/ca.crt',
+        'KWARGS': {
+            'ssl_certfile': '/path/to/client-cert.pem',
+            'ssl_keyfile': '/path/to/client-key.pem',
+            'ssl_min_version': ssl.TLSVersion.TLSv1_2,
+            'ssl_ciphers': 'HIGH:!aNULL',
+        },
+    }
+}
+```
+
+!!! note
+    If you use `ssl.TLSVersion` in your configuration (e.g. `ssl_min_version`), add `import ssl` at the top of your configuration file.
 
 ---
 

@@ -2,8 +2,8 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from dcim.models import Site
-from virtualization.models import *
 from tenancy.models import Tenant
+from virtualization.models import *
 
 
 class VirtualMachineTestCase(TestCase):
@@ -54,14 +54,18 @@ class VirtualMachineTestCase(TestCase):
         Site.objects.bulk_create(sites)
 
         clusters = (
-            Cluster(name='Cluster 1', type=cluster_type, site=sites[0]),
-            Cluster(name='Cluster 2', type=cluster_type, site=sites[1]),
-            Cluster(name='Cluster 3', type=cluster_type, site=None),
+            Cluster(name='Cluster 1', type=cluster_type, scope=sites[0]),
+            Cluster(name='Cluster 2', type=cluster_type, scope=sites[1]),
+            Cluster(name='Cluster 3', type=cluster_type, scope=None),
         )
-        Cluster.objects.bulk_create(clusters)
+        for cluster in clusters:
+            cluster.save()
 
         # VM with site only should pass
         VirtualMachine(name='vm1', site=sites[0]).full_clean()
+
+        # VM with site, cluster non-site should pass
+        VirtualMachine(name='vm1', site=sites[0], cluster=clusters[2]).full_clean()
 
         # VM with non-site cluster only should pass
         VirtualMachine(name='vm1', cluster=clusters[2]).full_clean()
@@ -90,3 +94,28 @@ class VirtualMachineTestCase(TestCase):
         # Uniqueness validation for name should ignore case
         with self.assertRaises(ValidationError):
             vm2.full_clean()
+
+    def test_disk_size(self):
+        vm = VirtualMachine(
+            cluster=Cluster.objects.first(),
+            name='Virtual Machine 1'
+        )
+        vm.save()
+        vm.refresh_from_db()
+        self.assertEqual(vm.disk, None)
+
+        # Create two VirtualDisks
+        VirtualDisk.objects.create(virtual_machine=vm, name='Virtual Disk 1', size=10)
+        VirtualDisk.objects.create(virtual_machine=vm, name='Virtual Disk 2', size=10)
+        vm.refresh_from_db()
+        self.assertEqual(vm.disk, 20)
+
+        # Delete one VirtualDisk
+        VirtualDisk.objects.first().delete()
+        vm.refresh_from_db()
+        self.assertEqual(vm.disk, 10)
+
+        # Attempt to manually overwrite the aggregate disk size
+        vm.disk = 30
+        with self.assertRaises(ValidationError):
+            vm.full_clean()

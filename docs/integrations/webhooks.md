@@ -1,10 +1,8 @@
 # Webhooks
 
-NetBox can be configured to transmit outgoing webhooks to remote systems in response to internal object changes. The receiver can act on the data in these webhook messages to perform related tasks.
+NetBox can be configured via [Event Rules](../features/event-rules.md) to transmit outgoing webhooks to remote systems in response to internal object changes. The receiver can act on the data in these webhook messages to perform related tasks.
 
 For example, suppose you want to automatically configure a monitoring system to start monitoring a device when its operational status is changed to active, and remove it from monitoring for any other status. You can create a webhook in NetBox for the device model and craft its content and destination URL to effect the desired change on the receiving system. Webhooks will be sent automatically by NetBox whenever the configured constraints are met.
-
-Each webhook must be associated with at least one NetBox object type and at least one event (create, update, or delete). Users can specify the receiver URL, HTTP request type (`GET`, `POST`, etc.), content type, and headers. A request body can also be specified; if left blank, this will default to a serialized representation of the affected object.
 
 !!! warning "Security Notice"
     Webhooks support the inclusion of user-submitted code to generate the URL, custom headers, and payloads, which may pose security risks under certain conditions. Only grant permission to create or modify webhooks to trusted users.
@@ -25,9 +23,9 @@ For example, you might create a NetBox webhook to [trigger a Slack message](http
 
 The following data is available as context for Jinja2 templates:
 
-* `event` - The type of event which triggered the webhook: created, updated, or deleted.
-* `model` - The NetBox model which triggered the change.
+* `event` - The type of event which triggered the webhook: `created`, `updated`, or `deleted`.
 * `timestamp` - The time at which the event occurred (in [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) format).
+* `object_type` - The NetBox model which triggered the change in the form `app_label.model_name`.
 * `username` - The name of the user account associated with the change.
 * `request_id` - The unique request ID. This may be used to correlate multiple changes associated with a single request.
 * `data` - A detailed representation of the object in its current state. This is typically equivalent to the model's representation in NetBox's REST API.
@@ -40,18 +38,20 @@ If no body template is specified, the request body will be populated with a JSON
 ```json
 {
     "event": "created",
-    "timestamp": "2021-03-09 17:55:33.968016+00:00",
-    "model": "site",
+    "timestamp": "2026-03-06T15:11:23.503186+00:00",
+    "object_type": "dcim.site",
     "username": "jstretch",
-    "request_id": "fdbca812-3142-4783-b364-2e2bd5c16c6a",
+    "request_id": "17af32f0-852a-46ca-a7d4-33ecd0c13de6",
     "data": {
-        "id": 19,
+        "id": 4,
+        "url": "/api/dcim/sites/4/",
+        "display_url": "/dcim/sites/4/",
+        "display": "Site 1",
         "name": "Site 1",
         "slug": "site-1",
-        "status": 
+        "status": {
             "value": "active",
-            "label": "Active",
-            "id": 1
+            "label": "Active"
         },
         "region": null,
         ...
@@ -59,8 +59,10 @@ If no body template is specified, the request body will be populated with a JSON
     "snapshots": {
         "prechange": null,
         "postchange": {
-            "created": "2021-03-09",
-            "last_updated": "2021-03-09T17:55:33.851Z",
+            "created": "2026-03-06T15:11:23.484Z",
+            "owner": null,
+            "description": "",
+            "comments": "",
             "name": "Site 1",
             "slug": "site-1",
             "status": "active",
@@ -70,28 +72,14 @@ If no body template is specified, the request body will be populated with a JSON
 }
 ```
 
-## Conditional Webhooks
-
-A webhook may include a set of conditional logic expressed in JSON used to control whether a webhook triggers for a specific object. For example, you may wish to trigger a webhook for devices only when the `status` field of an object is "active":
-
-```json
-{
-  "and": [
-    {
-      "attr": "status.value",
-      "value": "active"
-    }
-  ]
-}
-```
-
-For more detail, see the reference documentation for NetBox's [conditional logic](../reference/conditions.md).
+!!! note
+    The setting of conditional webhooks has been moved to [Event Rules](../features/event-rules.md) since NetBox 3.7
 
 ## Webhook Processing
 
-When a change is detected, any resulting webhooks are placed into a Redis queue for processing. This allows the user's request to complete without needing to wait for the outgoing webhook(s) to be processed. The webhooks are then extracted from the queue by the `rqworker` process and HTTP requests are sent to their respective destinations. The current webhook queue and any failed webhooks can be inspected in the admin UI under System > Background Tasks.
+Using [Event Rules](../features/event-rules.md), when a change is detected, any resulting webhooks are placed into a Redis queue for processing. This allows the user's request to complete without needing to wait for the outgoing webhook(s) to be processed. The webhooks are then extracted from the queue by the `rqworker` process and HTTP requests are sent to their respective destinations. The current webhook queue and any failed webhooks can be inspected under System > Background Tasks.
 
-A request is considered successful if the response has a 2XX status code; otherwise, the request is marked as having failed. Failed requests may be retried manually via the admin UI.
+A request is considered successful if the response has a 2XX status code; otherwise, the request is marked as having failed. Failed requests may be requeued manually under System > Background Tasks.
 
 ## Troubleshooting
 
@@ -122,6 +110,6 @@ Content-Type: application/x-www-form-urlencoded
 ------------
 ```
 
-Note that `webhook_receiver` does not actually _do_ anything with the information received: It merely prints the request headers and body for inspection.
+Note that `webhook_receiver` does not actually _do_ anything with the information received: It merely prints the request headers and body for inspection. If you don't see any output, check that the `rqworker` process is running and that webhook events are being placed into the queue.
 
-Now, when the NetBox webhook is triggered and processed, you should see its headers and content appear in the terminal where the webhook receiver is listening. If you don't, check that the `rqworker` process is running and that webhook events are being placed into the queue (visible under the NetBox admin UI).
+Webhook results can be found in the NetBox admin UI under the Background Tasks section. You can see any finished or failed runs, as well as the error log for failed webhooks.

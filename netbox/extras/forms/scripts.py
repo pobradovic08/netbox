@@ -1,17 +1,19 @@
 from django import forms
+from django.core.files.storage import storages
 from django.utils.translation import gettext_lazy as _
 
-from extras.choices import DurationChoices
-from utilities.forms import BootstrapMixin
+from core.choices import JobIntervalChoices
+from core.forms import ManagedFileForm
+from utilities.datetime import local_now
 from utilities.forms.widgets import DateTimePicker, NumberWithOptions
-from utilities.utils import local_now
 
 __all__ = (
+    'ScriptFileForm',
     'ScriptForm',
 )
 
 
-class ScriptForm(BootstrapMixin, forms.Form):
+class ScriptForm(forms.Form):
     _commit = forms.BooleanField(
         required=False,
         initial=True,
@@ -29,7 +31,7 @@ class ScriptForm(BootstrapMixin, forms.Form):
         min_value=1,
         label=_("Recurs every"),
         widget=NumberWithOptions(
-            options=DurationChoices
+            options=JobIntervalChoices
         ),
         help_text=_("Interval at which this script is re-run (in minutes)")
     )
@@ -38,7 +40,7 @@ class ScriptForm(BootstrapMixin, forms.Form):
         super().__init__(*args, **kwargs)
 
         # Annotate the current system time for reference
-        now = local_now().strftime('%Y-%m-%d %H:%M:%S')
+        now = local_now().strftime('%Y-%m-%d %H:%M:%S %Z')
         self.fields['_schedule_at'].help_text += _(' (current time: <strong>{now}</strong>)').format(now=now)
 
         # Remove scheduling fields if scheduling is disabled
@@ -56,3 +58,21 @@ class ScriptForm(BootstrapMixin, forms.Form):
             self.cleaned_data['_schedule_at'] = local_now()
 
         return self.cleaned_data
+
+
+class ScriptFileForm(ManagedFileForm):
+    """
+    ManagedFileForm with a custom save method to use django-storages.
+    """
+    def save(self, *args, **kwargs):
+        # If a file was uploaded, save it to disk
+        if self.cleaned_data['upload_file']:
+            storage = storages.create_storage(storages.backends["scripts"])
+
+            filename = self.cleaned_data['upload_file'].name
+            self.instance.file_path = filename
+            data = self.cleaned_data['upload_file']
+            storage.save(filename, data)
+
+        # need to skip ManagedFileForm save method
+        return super(ManagedFileForm, self).save(*args, **kwargs)

@@ -3,26 +3,34 @@ from django.utils.translation import gettext_lazy as _
 
 from extras.choices import *
 from extras.models import *
-from netbox.forms import NetBoxModelBulkEditForm
+from netbox.events import get_event_type_choices
+from netbox.forms import NetBoxModelBulkEditForm, PrimaryModelBulkEditForm
+from netbox.forms.mixins import ChangelogMessageMixin, OwnerMixin
 from utilities.forms import BulkEditForm, add_blank_choice
-from utilities.forms.fields import ColorField, DynamicModelChoiceField
+from utilities.forms.fields import ColorField, CommentField, DynamicModelChoiceField
+from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect
 
 __all__ = (
     'ConfigContextBulkEditForm',
+    'ConfigContextProfileBulkEditForm',
     'ConfigTemplateBulkEditForm',
     'CustomFieldBulkEditForm',
     'CustomFieldChoiceSetBulkEditForm',
     'CustomLinkBulkEditForm',
+    'EventRuleBulkEditForm',
     'ExportTemplateBulkEditForm',
+    'ImageAttachmentBulkEditForm',
     'JournalEntryBulkEditForm',
+    'NotificationGroupBulkEditForm',
     'SavedFilterBulkEditForm',
+    'TableConfigBulkEditForm',
     'TagBulkEditForm',
     'WebhookBulkEditForm',
 )
 
 
-class CustomFieldBulkEditForm(BulkEditForm):
+class CustomFieldBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=CustomField.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -40,6 +48,11 @@ class CustomFieldBulkEditForm(BulkEditForm):
         required=False,
         widget=BulkEditNullBooleanSelect()
     )
+    unique = forms.NullBooleanField(
+        label=_('Must be unique'),
+        required=False,
+        widget=BulkEditNullBooleanSelect()
+    )
     weight = forms.IntegerField(
         label=_('Weight'),
         required=False
@@ -48,22 +61,44 @@ class CustomFieldBulkEditForm(BulkEditForm):
         queryset=CustomFieldChoiceSet.objects.all(),
         required=False
     )
-    ui_visibility = forms.ChoiceField(
-        label=_("UI visibility"),
-        choices=add_blank_choice(CustomFieldVisibilityChoices),
-        required=False,
-        initial=''
+    ui_visible = forms.ChoiceField(
+        label=_("UI visible"),
+        choices=add_blank_choice(CustomFieldUIVisibleChoices),
+        required=False
+    )
+    ui_editable = forms.ChoiceField(
+        label=_("UI editable"),
+        choices=add_blank_choice(CustomFieldUIEditableChoices),
+        required=False
     )
     is_cloneable = forms.NullBooleanField(
         label=_('Is cloneable'),
         required=False,
         widget=BulkEditNullBooleanSelect()
     )
+    validation_minimum = forms.DecimalField(
+        label=_('Minimum value'),
+        required=False,
+    )
+    validation_maximum = forms.DecimalField(
+        label=_('Maximum value'),
+        required=False,
+    )
+    validation_regex = forms.CharField(
+        label=_('Validation regex'),
+        required=False
+    )
+    comments = CommentField()
 
+    fieldsets = (
+        FieldSet('group_name', 'description', 'weight', 'required', 'unique', 'choice_set', name=_('Attributes')),
+        FieldSet('ui_visible', 'ui_editable', 'is_cloneable', name=_('Behavior')),
+        FieldSet('validation_minimum', 'validation_maximum', 'validation_regex', name=_('Validation')),
+    )
     nullable_fields = ('group_name', 'description', 'choice_set')
 
 
-class CustomFieldChoiceSetBulkEditForm(BulkEditForm):
+class CustomFieldChoiceSetBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=CustomFieldChoiceSet.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -83,7 +118,7 @@ class CustomFieldChoiceSetBulkEditForm(BulkEditForm):
     nullable_fields = ('base_choices', 'description')
 
 
-class CustomLinkBulkEditForm(BulkEditForm):
+class CustomLinkBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=CustomLink.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -109,7 +144,7 @@ class CustomLinkBulkEditForm(BulkEditForm):
     )
 
 
-class ExportTemplateBulkEditForm(BulkEditForm):
+class ExportTemplateBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=ExportTemplate.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -124,6 +159,10 @@ class ExportTemplateBulkEditForm(BulkEditForm):
         max_length=50,
         required=False
     )
+    file_name = forms.CharField(
+        label=_('File name'),
+        required=False
+    )
     file_extension = forms.CharField(
         label=_('File extension'),
         max_length=15,
@@ -135,10 +174,10 @@ class ExportTemplateBulkEditForm(BulkEditForm):
         widget=BulkEditNullBooleanSelect()
     )
 
-    nullable_fields = ('description', 'mime_type', 'file_extension')
+    nullable_fields = ('description', 'mime_type', 'file_name', 'file_extension')
 
 
-class SavedFilterBulkEditForm(BulkEditForm):
+class SavedFilterBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=SavedFilter.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -166,42 +205,45 @@ class SavedFilterBulkEditForm(BulkEditForm):
     nullable_fields = ('description',)
 
 
-class WebhookBulkEditForm(NetBoxModelBulkEditForm):
-    model = Webhook
-
+class TableConfigBulkEditForm(BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
-        queryset=Webhook.objects.all(),
+        queryset=TableConfig.objects.all(),
         widget=forms.MultipleHiddenInput
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+    weight = forms.IntegerField(
+        label=_('Weight'),
+        required=False
     )
     enabled = forms.NullBooleanField(
         label=_('Enabled'),
         required=False,
         widget=BulkEditNullBooleanSelect()
     )
-    type_create = forms.NullBooleanField(
-        label=_('On create'),
+    shared = forms.NullBooleanField(
+        label=_('Shared'),
         required=False,
         widget=BulkEditNullBooleanSelect()
     )
-    type_update = forms.NullBooleanField(
-        label=_('On update'),
-        required=False,
-        widget=BulkEditNullBooleanSelect()
+
+    nullable_fields = ('description',)
+
+
+class WebhookBulkEditForm(OwnerMixin, NetBoxModelBulkEditForm):
+    model = Webhook
+
+    pk = forms.ModelMultipleChoiceField(
+        queryset=Webhook.objects.all(),
+        widget=forms.MultipleHiddenInput
     )
-    type_delete = forms.NullBooleanField(
-        label=_('On delete'),
-        required=False,
-        widget=BulkEditNullBooleanSelect()
-    )
-    type_job_start = forms.NullBooleanField(
-        label=_('On job start'),
-        required=False,
-        widget=BulkEditNullBooleanSelect()
-    )
-    type_job_end = forms.NullBooleanField(
-        label=_('On job end'),
-        required=False,
-        widget=BulkEditNullBooleanSelect()
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
     )
     http_method = forms.ChoiceField(
         choices=add_blank_choice(WebhookHttpMethodChoices),
@@ -226,10 +268,36 @@ class WebhookBulkEditForm(NetBoxModelBulkEditForm):
         label=_('CA file path')
     )
 
-    nullable_fields = ('secret', 'conditions', 'ca_file_path')
+    nullable_fields = ('secret', 'ca_file_path')
 
 
-class TagBulkEditForm(BulkEditForm):
+class EventRuleBulkEditForm(OwnerMixin, NetBoxModelBulkEditForm):
+    model = EventRule
+
+    pk = forms.ModelMultipleChoiceField(
+        queryset=EventRule.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+    enabled = forms.NullBooleanField(
+        label=_('Enabled'),
+        required=False,
+        widget=BulkEditNullBooleanSelect()
+    )
+    event_types = forms.MultipleChoiceField(
+        choices=get_event_type_choices(),
+        required=False,
+        label=_('Event types')
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+
+    nullable_fields = ('description', 'conditions')
+
+
+class TagBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=Tag.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -243,11 +311,28 @@ class TagBulkEditForm(BulkEditForm):
         max_length=200,
         required=False
     )
+    weight = forms.IntegerField(
+        label=_('Weight'),
+        required=False
+    )
 
     nullable_fields = ('description',)
 
 
-class ConfigContextBulkEditForm(BulkEditForm):
+class ConfigContextProfileBulkEditForm(PrimaryModelBulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=ConfigContextProfile.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+
+    model = ConfigContextProfile
+    fieldsets = (
+        FieldSet('description',),
+    )
+    nullable_fields = ('description',)
+
+
+class ConfigContextBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=ConfigContext.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -256,6 +341,10 @@ class ConfigContextBulkEditForm(BulkEditForm):
         label=_('Weight'),
         required=False,
         min_value=0
+    )
+    profile = DynamicModelChoiceField(
+        queryset=ConfigContextProfile.objects.all(),
+        required=False
     )
     is_active = forms.NullBooleanField(
         label=_('Is active'),
@@ -268,10 +357,13 @@ class ConfigContextBulkEditForm(BulkEditForm):
         max_length=100
     )
 
-    nullable_fields = ('description',)
+    fieldsets = (
+        FieldSet('weight', 'profile', 'is_active', 'description'),
+    )
+    nullable_fields = ('profile', 'description')
 
 
-class ConfigTemplateBulkEditForm(BulkEditForm):
+class ConfigTemplateBulkEditForm(ChangelogMessageMixin, OwnerMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=ConfigTemplate.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -281,11 +373,46 @@ class ConfigTemplateBulkEditForm(BulkEditForm):
         max_length=200,
         required=False
     )
+    mime_type = forms.CharField(
+        label=_('MIME type'),
+        max_length=50,
+        required=False
+    )
+    file_name = forms.CharField(
+        label=_('File name'),
+        required=False
+    )
+    file_extension = forms.CharField(
+        label=_('File extension'),
+        max_length=15,
+        required=False
+    )
+    as_attachment = forms.NullBooleanField(
+        label=_('As attachment'),
+        required=False,
+        widget=BulkEditNullBooleanSelect()
+    )
+    auto_sync_enabled = forms.NullBooleanField(
+        label=_('Auto sync enabled'),
+        required=False,
+        widget=BulkEditNullBooleanSelect()
+    )
+    nullable_fields = ('description', 'mime_type', 'file_name', 'file_extension', 'auto_sync_enabled',)
 
-    nullable_fields = ('description',)
+
+class ImageAttachmentBulkEditForm(ChangelogMessageMixin, BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=ImageAttachment.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
 
 
-class JournalEntryBulkEditForm(BulkEditForm):
+class JournalEntryBulkEditForm(ChangelogMessageMixin, BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=JournalEntry.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -295,8 +422,18 @@ class JournalEntryBulkEditForm(BulkEditForm):
         choices=add_blank_choice(JournalEntryKindChoices),
         required=False
     )
-    comments = forms.CharField(
-        label=_('Comments'),
-        required=False,
-        widget=forms.Textarea()
+    comments = CommentField()
+
+
+class NotificationGroupBulkEditForm(ChangelogMessageMixin, BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=NotificationGroup.objects.all(),
+        widget=forms.MultipleHiddenInput
     )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+
+    nullable_fields = ('description',)

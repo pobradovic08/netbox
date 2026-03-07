@@ -1,6 +1,6 @@
 # Remote Authentication Settings
 
-The configuration parameters listed here control remote authentication for NetBox. Note that `REMOTE_AUTH_ENABLED` must be true in order for these settings to take effect.
+The configuration parameters listed here control remote authentication for NetBox. Note that `REMOTE_AUTH_ENABLED` must be `True` in order for these settings to take effect.
 
 ---
 
@@ -8,7 +8,7 @@ The configuration parameters listed here control remote authentication for NetBo
 
 Default: `False`
 
-If true, NetBox will automatically create groups specified in the `REMOTE_AUTH_GROUP_HEADER` header if they don't already exist. (Requires `REMOTE_AUTH_ENABLED`.)
+If `True`, NetBox will automatically create groups specified in the `REMOTE_AUTH_GROUP_HEADER` header if they don't already exist. (Requires `REMOTE_AUTH_ENABLED`.)
 
 ---
 
@@ -16,7 +16,7 @@ If true, NetBox will automatically create groups specified in the `REMOTE_AUTH_G
 
 Default: `False`
 
-If true, NetBox will automatically create local accounts for users authenticated via a remote service. (Requires `REMOTE_AUTH_ENABLED`.)
+If `True`, NetBox will automatically create local accounts for users authenticated via a remote service. (Requires `REMOTE_AUTH_ENABLED`.)
 
 ---
 
@@ -43,7 +43,7 @@ The list of groups to assign a new user account when created using remote authen
 
 Default: `{}` (Empty dictionary)
 
-A mapping of permissions to assign a new user account when created using remote authentication. Each key in the dictionary should be set to a dictionary of the attributes to be applied to the permission, or `None` to allow all objects. (Requires `REMOTE_AUTH_ENABLED` as True and `REMOTE_AUTH_GROUP_SYNC_ENABLED` as False.)
+A mapping of permissions to assign a new user account when created using remote authentication. Each key in the dictionary should be set to a dictionary of the attributes to be applied to the permission, or `None` to allow all objects. (Requires `REMOTE_AUTH_ENABLED` as `True` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` as `False`.)
 
 ---
 
@@ -67,7 +67,7 @@ When remote user authentication is in use, this is the name of the HTTP header w
 
 Default: `|` (Pipe)
 
-The Seperator upon which `REMOTE_AUTH_GROUP_HEADER` gets split into individual Groups. This needs to be coordinated with your authentication Proxy. (Requires `REMOTE_AUTH_ENABLED` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` )
+The Separator upon which `REMOTE_AUTH_GROUP_HEADER` gets split into individual Groups. This needs to be coordinated with your authentication Proxy. (Requires `REMOTE_AUTH_ENABLED` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` )
 
 ---
 
@@ -84,6 +84,9 @@ NetBox can be configured to sync remote user groups by inferring user authentica
 Default: `'HTTP_REMOTE_USER'`
 
 When remote user authentication is in use, this is the name of the HTTP header which informs NetBox of the currently authenticated user. For example, to use the request header `X-Remote-User` it needs to be set to `HTTP_X_REMOTE_USER`. (Requires `REMOTE_AUTH_ENABLED`.)
+
+!!! warning Verify Header Compatibility
+    Some WSGI servers may drop headers which contain unsupported characters. For instance, gunicorn v22.0 and later silently drops HTTP headers containing underscores. This behavior can be disabled by changing gunicorn's [`header_map`](https://docs.gunicorn.org/en/stable/settings.html#header-map) setting to `dangerous`.
 
 ---
 
@@ -124,19 +127,3 @@ The list of groups that promote an remote User to Superuser on Login. If group i
 Default: `[]` (Empty list)
 
 The list of users that get promoted to Superuser on Login. If user isn't present in list on next Login, the Role gets revoked. (Requires `REMOTE_AUTH_ENABLED` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` )
-
----
-
-## REMOTE_AUTH_STAFF_GROUPS
-
-Default: `[]` (Empty list)
-
-The list of groups that promote an remote User to Staff on Login. If group isn't present on next Login, the Role gets revoked. (Requires `REMOTE_AUTH_ENABLED` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` )
-
----
-
-## REMOTE_AUTH_STAFF_USERS
-
-Default: `[]` (Empty list)
-
-The list of users that get promoted to Staff on Login. If user isn't present in list on next Login, the Role gets revoked. (Requires `REMOTE_AUTH_ENABLED` and `REMOTE_AUTH_GROUP_SYNC_ENABLED` )

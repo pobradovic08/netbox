@@ -1,6 +1,7 @@
 from django.db.models import QuerySet
 from rest_framework.pagination import LimitOffsetPagination
 
+from netbox.api.exceptions import QuerySetNotOrdered
 from netbox.config import get_config
 
 
@@ -14,6 +15,12 @@ class OptionalLimitOffsetPagination(LimitOffsetPagination):
         self.default_limit = get_config().PAGINATE_COUNT
 
     def paginate_queryset(self, queryset, request, view=None):
+
+        if isinstance(queryset, QuerySet) and not queryset.ordered:
+            raise QuerySetNotOrdered(
+                "Paginating over an unordered queryset is unreliable. Ensure that a minimal "
+                "ordering has been applied to the queryset for this API endpoint."
+            )
 
         if isinstance(queryset, QuerySet):
             self.count = self.get_queryset_count(queryset)
@@ -33,24 +40,31 @@ class OptionalLimitOffsetPagination(LimitOffsetPagination):
 
         if self.limit:
             return list(queryset[self.offset:self.offset + self.limit])
-        else:
-            return list(queryset[self.offset:])
+        return list(queryset[self.offset:])
 
     def get_limit(self, request):
+        max_limit = self.default_limit
+        MAX_PAGE_SIZE = get_config().MAX_PAGE_SIZE
+        if MAX_PAGE_SIZE:
+            max_limit = min(max_limit, MAX_PAGE_SIZE)
+
         if self.limit_query_param:
             try:
                 limit = int(request.query_params[self.limit_query_param])
                 if limit < 0:
                     raise ValueError()
-                # Enforce maximum page size, if defined
-                MAX_PAGE_SIZE = get_config().MAX_PAGE_SIZE
+
                 if MAX_PAGE_SIZE:
-                    return MAX_PAGE_SIZE if limit == 0 else min(limit, MAX_PAGE_SIZE)
-                return limit
+                    if limit == 0:
+                        max_limit = MAX_PAGE_SIZE
+                    else:
+                        max_limit = min(MAX_PAGE_SIZE, limit)
+                else:
+                    max_limit = limit
             except (KeyError, ValueError):
                 pass
 
-        return self.default_limit
+        return max_limit
 
     def get_queryset_count(self, queryset):
         return queryset.count()
@@ -83,3 +97,28 @@ class StripCountAnnotationsPaginator(OptionalLimitOffsetPagination):
         cloned_queryset.query.annotations.clear()
 
         return cloned_queryset.count()
+
+
+class LimitOffsetListPagination(LimitOffsetPagination):
+    """
+    DRF LimitOffset Paginator but for list instead of queryset
+    """
+    count = 0
+    offset = 0
+
+    def paginate_list(self, data, request, view=None):
+        self.request = request
+        self.limit = self.get_limit(request)
+        self.count = len(data)
+        self.offset = self.get_offset(request)
+
+        if self.limit is None:
+            self.limit = self.count
+
+        if self.count == 0 or self.offset > self.count:
+            return []
+
+        if self.count > self.limit and self.template is not None:
+            self.display_page_controls = True
+
+        return data[self.offset:self.offset + self.limit]

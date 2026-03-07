@@ -6,22 +6,16 @@ This section of the documentation discusses installing and configuring the NetBo
 
 Begin by installing all system packages required by NetBox and its dependencies.
 
-!!! warning "Python 3.8 or later required"
-    NetBox requires Python 3.8, 3.9, 3.10 or 3.11.
+!!! warning "Python 3.12 or later required"
+    NetBox supports only Python 3.12 or later.
 
-=== "Ubuntu"
+```no-highlight
+sudo apt install -y python3 python3-pip python3-venv python3-dev \
+build-essential libxml2-dev libxslt1-dev libffi-dev libpq-dev \
+libssl-dev zlib1g-dev
+```
 
-    ```no-highlight
-    sudo apt install -y python3 python3-pip python3-venv python3-dev build-essential libxml2-dev libxslt1-dev libffi-dev libpq-dev libssl-dev zlib1g-dev
-    ```
-
-=== "CentOS"
-
-    ```no-highlight
-    sudo yum install -y gcc libxml2-devel libxslt-devel libffi-devel libpq-devel openssl-devel redhat-rpm-config
-    ```
-
-Before continuing, check that your installed Python version is at least 3.8:
+Before continuing, check that your installed Python version is at least 3.12:
 
 ```no-highlight
 python3 -V
@@ -29,7 +23,7 @@ python3 -V
 
 ## Download NetBox
 
-This documentation provides two options for installing NetBox: from a downloadable archive, or from the git repository. Installing from a package (option A below) requires manually fetching and extracting the archive for every future update, whereas installation via git (option B) allows for seamless upgrades by re-pulling the `master` branch.
+This documentation provides two options for installing NetBox: from a downloadable archive, or from the git repository. Installing from a package (option A below) requires manually fetching and extracting the archive for every future update, whereas installation via git (option B) allows for seamless upgrades by checking out the latest release tag.
 
 ### Option A: Download a Release Archive
 
@@ -42,7 +36,7 @@ sudo ln -s /opt/netbox-X.Y.Z/ /opt/netbox
 ```
 
 !!! note
-    It is recommended to install NetBox in a directory named for its version number. For example, NetBox v3.0.0 would be installed into `/opt/netbox-3.0.0`, and a symlink from `/opt/netbox/` would point to this location. (You can verify this configuration with the command `ls -l /opt | grep netbox`.) This allows for future releases to be installed in parallel without interrupting the current installation. When changing to the new release, only the symlink needs to be updated.
+    It is recommended to install NetBox in a directory named for its version number. For example, NetBox v4.0.0 would be installed into `/opt/netbox-4.0.0`, and a symlink from `/opt/netbox/` would point to this location. (You can verify this configuration with the command `ls -l /opt | grep netbox`.) This allows for future releases to be installed in parallel without interrupting the current installation. When changing to the new release, only the symlink needs to be updated.
 
 ### Option B: Clone the Git Repository
 
@@ -55,64 +49,46 @@ cd /opt/netbox/
 
 If `git` is not already installed, install it:
 
-=== "Ubuntu"
-
-    ```no-highlight
-    sudo apt install -y git
-    ```
-
-=== "CentOS"
-
-    ```no-highlight
-    sudo yum install -y git
-    ```
-
-Next, clone the **master** branch of the NetBox GitHub repository into the current directory. (This branch always holds the current stable release.)
-
 ```no-highlight
-sudo git clone -b master --depth 1 https://github.com/netbox-community/netbox.git .
+sudo apt install -y git
 ```
 
-!!! note
-    The `git clone` command above utilizes a "shallow clone" to retrieve only the most recent commit. If you need to download the entire history, omit the `--depth 1` argument.
+Next, clone the git repository:
 
-The `git clone` command should generate output similar to the following:
+```no-highlight
+sudo git clone https://github.com/netbox-community/netbox.git .
+```
+
+This command should generate output similar to the following:
 
 ```
 Cloning into '.'...
-remote: Enumerating objects: 996, done.
-remote: Counting objects: 100% (996/996), done.
-remote: Compressing objects: 100% (935/935), done.
-remote: Total 996 (delta 148), reused 386 (delta 34), pack-reused 0
-Receiving objects: 100% (996/996), 4.26 MiB | 9.81 MiB/s, done.
-Resolving deltas: 100% (148/148), done.
+remote: Enumerating objects: 148317, done.
+remote: Counting objects: 100% (183/183), done.
+remote: Compressing objects: 100% (115/115), done.
+remote: Total 148317 (delta 127), reused 68 (delta 68), pack-reused 148134 (from 3)
+Receiving objects: 100% (148317/148317), 165.12 MiB | 28.71 MiB/s, done.
+Resolving deltas: 100% (116428/116428), done.
 ```
 
-!!! note
-    Installation via git also allows you to easily try out different versions of NetBox. To check out a [specific NetBox release](https://github.com/netbox-community/netbox/releases), use the `git checkout` command with the desired release tag. For example, `git checkout v3.0.8`.
+Finally, check out the tag for the desired release. You can find these on our [releases page](https://github.com/netbox-community/netbox/releases). Replace `vX.Y.Z` with your selected release tag below.
+
+```
+sudo git checkout vX.Y.Z
+```
+
+Using this installation method enables easy upgrades in the future by simply checking out the latest release tag.
 
 ## Create the NetBox System User
 
 Create a system user account named `netbox`. We'll configure the WSGI and HTTP services to run under this account. We'll also assign this user ownership of the media directory. This ensures that NetBox will be able to save uploaded files.
 
-=== "Ubuntu"
-
-    ```
-    sudo adduser --system --group netbox
-    sudo chown --recursive netbox /opt/netbox/netbox/media/
-    sudo chown --recursive netbox /opt/netbox/netbox/reports/
-    sudo chown --recursive netbox /opt/netbox/netbox/scripts/
-    ```
-
-=== "CentOS"
-
-    ```
-    sudo groupadd --system netbox
-    sudo adduser --system -g netbox netbox
-    sudo chown --recursive netbox /opt/netbox/netbox/media/
-    sudo chown --recursive netbox /opt/netbox/netbox/reports/
-    sudo chown --recursive netbox /opt/netbox/netbox/scripts/
-    ```
+```
+sudo adduser --system --group netbox
+sudo chown --recursive netbox /opt/netbox/netbox/media/
+sudo chown --recursive netbox /opt/netbox/netbox/reports/
+sudo chown --recursive netbox /opt/netbox/netbox/scripts/
+```
 
 ## Configuration
 
@@ -126,13 +102,14 @@ sudo cp configuration_example.py configuration.py
 Open `configuration.py` with your preferred editor to begin configuring NetBox. NetBox offers [many configuration parameters](../configuration/index.md), but only the following four are required for new installations:
 
 * `ALLOWED_HOSTS`
-* `DATABASE`
+* `API_TOKEN_PEPPERS`
+* `DATABASES`
 * `REDIS`
 * `SECRET_KEY`
 
 ### ALLOWED_HOSTS
 
-This is a list of the valid hostnames and IP addresses by which this server can be reached. You must specify at least one name or IP address. (Note that this does not restrict the locations from which NetBox may be accessed: It is merely for [HTTP host header validation](https://docs.djangoproject.com/en/3.0/topics/security/#host-headers-virtual-hosting).)
+This is a list of the valid hostnames and IP addresses by which this server can be reached. You must specify at least one name or IP address. (Note that this does not restrict the locations from which NetBox may be accessed: It is merely for [HTTP host header validation](https://docs.djangoproject.com/en/stable/topics/security/#host-headers-virtual-hosting).)
 
 ```python
 ALLOWED_HOSTS = ['netbox.example.com', '192.0.2.123']
@@ -144,24 +121,45 @@ If you are not yet sure what the domain name and/or IP address of the NetBox ins
 ALLOWED_HOSTS = ['*']
 ```
 
-### DATABASE
+### API_TOKEN_PEPPERS
 
-This parameter holds the database configuration details. You must define the username and password used when you configured PostgreSQL. If the service is running on a remote host, update the `HOST` and `PORT` parameters accordingly. See the [configuration documentation](../configuration/required-parameters.md#database) for more detail on individual parameters.
+Define at least one random cryptographic pepper, identified by a numeric ID starting at 1. This will be used to generate SHA256 checksums for API tokens.
 
 ```python
-DATABASE = {
-    'NAME': 'netbox',               # Database name
-    'USER': 'netbox',               # PostgreSQL username
-    'PASSWORD': 'J5brHrAXFLQSif0K', # PostgreSQL password
-    'HOST': 'localhost',            # Database server
-    'PORT': '',                     # Database port (leave blank for default)
-    'CONN_MAX_AGE': 300,            # Max database connection age (seconds)
+API_TOKEN_PEPPERS = {
+    # DO NOT USE THIS EXAMPLE PEPPER IN PRODUCTION
+    1: 'kp7ht*76fiQAhUi5dHfASLlYUE_S^gI^(7J^K5M!LfoH@vl&b_',
+}
+```
+
+!!! tip
+    As with [`SECRET_KEY`](#secret_key) below, you can use the `generate_secret_key.py` script to generate a random pepper:
+    ```no-highlight
+    python3 ../generate_secret_key.py
+    ```
+
+### DATABASES
+
+This parameter holds the PostgreSQL database configuration details. The default database must be defined; additional databases may be defined as needed e.g. by plugins.
+
+A username and password must be defined for the default database. If the service is running on a remote host, update the `HOST` and `PORT` parameters accordingly. See the [configuration documentation](../configuration/required-parameters.md#databases) for more detail on individual parameters.
+
+```python
+DATABASES = {
+    'default': {
+        'NAME': 'netbox',               # Database name
+        'USER': 'netbox',               # PostgreSQL username
+        'PASSWORD': 'J5brHrAXFLQSif0K', # PostgreSQL password
+        'HOST': 'localhost',            # Database server
+        'PORT': '',                     # Database port (leave blank for default)
+        'CONN_MAX_AGE': 300,            # Max database connection age (seconds)
+    }
 }
 ```
 
 ### REDIS
 
-Redis is a in-memory key-value store used by NetBox for caching and background task queuing. Redis typically requires minimal configuration; the values below should suffice for most installations. See the [configuration documentation](../configuration/required-parameters.md#redis) for more detail on individual parameters.
+Redis is an in-memory key-value store used by NetBox for caching and background task queuing. Redis typically requires minimal configuration; the values below should suffice for most installations. See the [configuration documentation](../configuration/required-parameters.md#redis) for more detail on individual parameters.
 
 Note that NetBox requires the specification of two separate Redis databases: `tasks` and `caching`. These may both be provided by the same Redis service, however each should have a unique numeric database ID.
 
@@ -205,7 +203,7 @@ All Python packages required by NetBox are listed in `requirements.txt` and will
 
 ### Remote File Storage
 
-By default, NetBox will use the local filesystem to store uploaded files. To use a remote filesystem, install the [`django-storages`](https://django-storages.readthedocs.io/en/stable/) library and configure your [desired storage backend](../configuration/system.md#storage_backend) in `configuration.py`.
+By default, NetBox will use the local filesystem to store uploaded files. To use a remote filesystem, install the [`django-storages`](https://django-storages.readthedocs.io/en/stable/) library and configure your [desired storage backend](../configuration/system.md#storages) in `configuration.py`.
 
 ```no-highlight
 sudo sh -c "echo 'django-storages' >> /opt/netbox/local_requirements.txt"
@@ -227,13 +225,24 @@ sudo sh -c "echo 'boto3' >> /opt/netbox/local_requirements.txt"
 !!! info
     These packages were previously required in NetBox v3.5 but now are optional.
 
+### Sentry Integration
+
+NetBox may be configured to send error reports to [Sentry](../administration/error-reporting.md) for analysis. This integration requires installation of the `sentry-sdk` Python library.
+
+```no-highlight
+sudo sh -c "echo 'sentry-sdk' >> /opt/netbox/local_requirements.txt"
+```
+
+!!! info
+    Sentry integration was previously included by default in NetBox v3.6 but is now optional.
+
 ## Run the Upgrade Script
 
 Once NetBox has been configured, we're ready to proceed with the actual installation. We'll run the packaged upgrade script (`upgrade.sh`) to perform the following actions:
 
 * Create a Python virtual environment
 * Installs all required Python packages
-* Run database schema migrations
+* Run database schema migrations (skip with `--readonly`)
 * Builds the documentation locally (for offline use)
 * Aggregate static resource files on disk
 
@@ -244,14 +253,17 @@ Once NetBox has been configured, we're ready to proceed with the actual installa
 sudo /opt/netbox/upgrade.sh
 ```
 
-Note that **Python 3.8 or later is required** for NetBox v3.2 and later releases. If the default Python installation on your server is set to a lesser version,  pass the path to the supported installation as an environment variable named `PYTHON`. (Note that the environment variable must be passed _after_ the `sudo` command.)
+Note that **Python 3.12 or later is required** for NetBox v4.5 and later releases. If the default Python installation on your server is set to a lesser version, pass the path to the supported installation as an environment variable named `PYTHON`. (Note that the environment variable must be passed _after_ the `sudo` command.)
 
 ```no-highlight
-sudo PYTHON=/usr/bin/python3.8 /opt/netbox/upgrade.sh
+sudo PYTHON=/usr/bin/python3.12 /opt/netbox/upgrade.sh
 ```
 
 !!! note
     Upon completion, the upgrade script may warn that no existing virtual environment was detected. As this is a new installation, this warning can be safely ignored.
+
+!!! note
+    To run the script on a node connected to a database in read-only mode, include the `--readonly` parameter. This will skip the application of any database migrations.
 
 ## Create a Super User
 
@@ -270,18 +282,6 @@ cd /opt/netbox/netbox
 python3 manage.py createsuperuser
 ```
 
-## Schedule the Housekeeping Task
-
-NetBox includes a `housekeeping` management command that handles some recurring cleanup tasks, such as clearing out old sessions and expired change records. Although this command may be run manually, it is recommended to configure a scheduled job using the system's `cron` daemon or a similar utility.
-
-A shell script which invokes this command is included at `contrib/netbox-housekeeping.sh`. It can be copied to or linked from your system's daily cron task directory, or included within the crontab directly. (If installing NetBox into a nonstandard path, be sure to update the system paths within this script first.)
-
-```shell
-sudo ln -s /opt/netbox/contrib/netbox-housekeeping.sh /etc/cron.daily/netbox-housekeeping
-```
-
-See the [housekeeping documentation](../administration/housekeeping.md) for further details.
-
 ## Test the Application
 
 At this point, we should be able to run NetBox's development server for testing. We can check by starting a development instance locally.
@@ -296,24 +296,16 @@ python3 manage.py runserver 0.0.0.0:8000 --insecure
 If successful, you should see output similar to the following:
 
 ```no-highlight
-Watching for file changes with StatReloader
 Performing system checks...
 
 System check identified no issues (0 silenced).
-August 30, 2021 - 18:02:23
-Django version 3.2.6, using settings 'netbox.settings'
-Starting development server at http://127.0.0.1:8000/
+January 26, 2026 - 17:00:00
+Django version 5.2.10, using settings 'netbox.settings'
+Starting development server at http://0.0.0.0:8000/
 Quit the server with CONTROL-C.
 ```
 
 Next, connect to the name or IP of the server (as defined in `ALLOWED_HOSTS`) on port 8000; for example, <http://127.0.0.1:8000/>. You should be greeted with the NetBox home page. Try logging in using the username and password specified when creating a superuser.
-
-!!! note
-    By default RHEL based distros will likely block your testing attempts with firewalld. The development server port can be opened with `firewall-cmd` (add `--permanent` if you want the rule to survive server restarts):
-
-    ```no-highlight
-    firewall-cmd --zone=public --add-port=8000/tcp
-    ```
 
 !!! danger "Not for production use"
     The development server is for development and testing purposes only. It is neither performant nor secure enough for production use. **Do not use it in production.**

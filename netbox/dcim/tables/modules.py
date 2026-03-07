@@ -1,53 +1,83 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
+from django.utils.translation import gettext_lazy as _
 
-from dcim.models import Module, ModuleType
-from netbox.tables import NetBoxTable, columns
-from .template_code import WEIGHT
+from dcim.models import Module, ModuleType, ModuleTypeProfile
+from netbox.tables import PrimaryModelTable, columns
+
+from .template_code import MODULETYPEPROFILE_ATTRIBUTES, WEIGHT
 
 __all__ = (
     'ModuleTable',
+    'ModuleTypeProfileTable',
     'ModuleTypeTable',
 )
 
 
-class ModuleTypeTable(NetBoxTable):
-    model = tables.Column(
-        linkify=True,
-        verbose_name=_('Module Type')
+class ModuleTypeProfileTable(PrimaryModelTable):
+    name = tables.Column(
+        verbose_name=_('Name'),
+        linkify=True
+    )
+    attributes = columns.TemplateColumn(
+        template_code=MODULETYPEPROFILE_ATTRIBUTES,
+        accessor=tables.A('schema__properties'),
+        orderable=False,
+        verbose_name=_('Attributes')
+    )
+    tags = columns.TagColumn(
+        url_name='dcim:moduletypeprofile_list'
+    )
+
+    class Meta(PrimaryModelTable.Meta):
+        model = ModuleTypeProfile
+        fields = (
+            'pk', 'id', 'name', 'description', 'comments', 'tags', 'created', 'last_updated',
+        )
+        default_columns = (
+            'pk', 'name', 'description', 'attributes',
+        )
+
+
+class ModuleTypeTable(PrimaryModelTable):
+    profile = tables.Column(
+        verbose_name=_('Profile'),
+        linkify=True
     )
     manufacturer = tables.Column(
         verbose_name=_('Manufacturer'),
         linkify=True
     )
-    instance_count = columns.LinkedCountColumn(
-        viewname='dcim:module_list',
-        url_params={'module_type_id': 'pk'},
-        verbose_name=_('Instances')
-    )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
-    )
-    tags = columns.TagColumn(
-        url_name='dcim:moduletype_list'
+    model = tables.Column(
+        linkify=True,
+        verbose_name=_('Module Type')
     )
     weight = columns.TemplateColumn(
         verbose_name=_('Weight'),
         template_code=WEIGHT,
         order_by=('_abs_weight', 'weight_unit')
     )
+    attributes = columns.DictColumn()
+    module_count = columns.LinkedCountColumn(
+        viewname='dcim:module_list',
+        url_params={'module_type_id': 'pk'},
+        verbose_name=_('Module Count'),
+    )
+    tags = columns.TagColumn(
+        url_name='dcim:moduletype_list'
+    )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = ModuleType
         fields = (
-            'pk', 'id', 'model', 'manufacturer', 'part_number', 'weight', 'description', 'comments', 'tags',
+            'pk', 'id', 'model', 'profile', 'manufacturer', 'part_number', 'airflow', 'weight', 'description',
+            'attributes', 'module_count', 'comments', 'tags', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'model', 'manufacturer', 'part_number',
+            'pk', 'model', 'profile', 'manufacturer', 'part_number', 'module_count',
         )
 
 
-class ModuleTable(NetBoxTable):
+class ModuleTable(PrimaryModelTable):
     device = tables.Column(
         verbose_name=_('Device'),
         linkify=True
@@ -68,18 +98,15 @@ class ModuleTable(NetBoxTable):
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
     )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
-    )
     tags = columns.TagColumn(
         url_name='dcim:module_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = Module
         fields = (
             'pk', 'id', 'device', 'module_bay', 'manufacturer', 'module_type', 'status', 'serial', 'asset_tag',
-            'description', 'comments', 'tags',
+            'description', 'comments', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'id', 'device', 'module_bay', 'manufacturer', 'module_type', 'status', 'serial', 'asset_tag',

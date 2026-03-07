@@ -1,29 +1,21 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
-from dcim.models import Location, Region, Site, SiteGroup
-from tenancy.tables import ContactsColumnMixin, TenancyColumnsMixin
+from django.utils.translation import gettext_lazy as _
 
-from netbox.tables import NetBoxTable, columns
+from dcim.models import Location, Region, Site, SiteGroup
+from netbox.tables import NestedGroupModelTable, PrimaryModelTable, columns
+from tenancy.tables import ContactsColumnMixin, TenancyColumnsMixin
 
 from .template_code import LOCATION_BUTTONS
 
 __all__ = (
     'LocationTable',
     'RegionTable',
-    'SiteTable',
     'SiteGroupTable',
+    'SiteTable',
 )
 
 
-#
-# Regions
-#
-
-class RegionTable(ContactsColumnMixin, NetBoxTable):
-    name = columns.MPTTColumn(
-        verbose_name=_('Name'),
-        linkify=True
-    )
+class RegionTable(ContactsColumnMixin, NestedGroupModelTable):
     site_count = columns.LinkedCountColumn(
         viewname='dcim:site_list',
         url_params={'region_id': 'pk'},
@@ -33,24 +25,16 @@ class RegionTable(ContactsColumnMixin, NetBoxTable):
         url_name='dcim:region_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(NestedGroupModelTable.Meta):
         model = Region
         fields = (
-            'pk', 'id', 'name', 'slug', 'site_count', 'description', 'contacts', 'tags', 'created', 'last_updated',
-            'actions',
+            'pk', 'id', 'name', 'parent', 'slug', 'site_count', 'description', 'comments', 'contacts', 'tags',
+            'created', 'last_updated', 'actions',
         )
         default_columns = ('pk', 'name', 'site_count', 'description')
 
 
-#
-# Site groups
-#
-
-class SiteGroupTable(ContactsColumnMixin, NetBoxTable):
-    name = columns.MPTTColumn(
-        verbose_name=_('Name'),
-        linkify=True
-    )
+class SiteGroupTable(ContactsColumnMixin, NestedGroupModelTable):
     site_count = columns.LinkedCountColumn(
         viewname='dcim:site_list',
         url_params={'group_id': 'pk'},
@@ -60,20 +44,16 @@ class SiteGroupTable(ContactsColumnMixin, NetBoxTable):
         url_name='dcim:sitegroup_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(NestedGroupModelTable.Meta):
         model = SiteGroup
         fields = (
-            'pk', 'id', 'name', 'slug', 'site_count', 'description', 'contacts', 'tags', 'created', 'last_updated',
-            'actions',
+            'pk', 'id', 'name', 'parent', 'slug', 'site_count', 'description', 'comments', 'contacts', 'tags',
+            'created', 'last_updated', 'actions',
         )
         default_columns = ('pk', 'name', 'site_count', 'description')
 
 
-#
-# Sites
-#
-
-class SiteTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
+class SiteTable(TenancyColumnsMixin, ContactsColumnMixin, PrimaryModelTable):
     name = tables.Column(
         verbose_name=_('Name'),
         linkify=True
@@ -94,19 +74,20 @@ class SiteTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
         verbose_name=_('ASNs')
     )
     asn_count = columns.LinkedCountColumn(
-        accessor=tables.A('asns__count'),
         viewname='ipam:asn_list',
         url_params={'site_id': 'pk'},
         verbose_name=_('ASN Count')
     )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
+    device_count = columns.LinkedCountColumn(
+        viewname='dcim:device_list',
+        url_params={'site_id': 'pk'},
+        verbose_name=_('Devices')
     )
     tags = columns.TagColumn(
         url_name='dcim:site_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = Site
         fields = (
             'pk', 'id', 'name', 'slug', 'status', 'facility', 'region', 'group', 'tenant', 'tenant_group', 'asns',
@@ -116,15 +97,7 @@ class SiteTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
         default_columns = ('pk', 'name', 'status', 'facility', 'region', 'group', 'tenant', 'description')
 
 
-#
-# Locations
-#
-
-class LocationTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
-    name = columns.MPTTColumn(
-        verbose_name=_('Name'),
-        linkify=True
-    )
+class LocationTable(TenancyColumnsMixin, ContactsColumnMixin, NestedGroupModelTable):
     site = tables.Column(
         verbose_name=_('Site'),
         linkify=True
@@ -142,6 +115,11 @@ class LocationTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
         url_params={'location_id': 'pk'},
         verbose_name=_('Devices')
     )
+    vlangroup_count = columns.LinkedCountColumn(
+        viewname='ipam:vlangroup_list',
+        url_params={'location': 'pk'},
+        verbose_name=_('VLAN Groups')
+    )
     tags = columns.TagColumn(
         url_name='dcim:location_list'
     )
@@ -149,10 +127,14 @@ class LocationTable(TenancyColumnsMixin, ContactsColumnMixin, NetBoxTable):
         extra_buttons=LOCATION_BUTTONS
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(NestedGroupModelTable.Meta):
         model = Location
         fields = (
-            'pk', 'id', 'name', 'site', 'status', 'tenant', 'tenant_group', 'rack_count', 'device_count', 'description',
-            'slug', 'contacts', 'tags', 'actions', 'created', 'last_updated',
+            'pk', 'id', 'name', 'parent', 'site', 'status', 'facility', 'tenant', 'tenant_group', 'rack_count',
+            'device_count', 'description', 'slug', 'comments', 'contacts', 'tags', 'actions', 'created', 'last_updated',
+            'vlangroup_count',
         )
-        default_columns = ('pk', 'name', 'site', 'status', 'tenant', 'rack_count', 'device_count', 'description')
+        default_columns = (
+            'pk', 'name', 'site', 'status', 'facility', 'tenant', 'rack_count', 'device_count', 'vlangroup_count',
+            'description'
+        )

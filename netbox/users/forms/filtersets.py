@@ -1,38 +1,39 @@
 from django import forms
-from extras.forms.mixins import SavedFiltersMixin
-from utilities.forms import FilterForm
-from users.models import Token
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
 from django.utils.translation import gettext_lazy as _
 
 from netbox.forms import NetBoxModelFilterSetForm
-from users.models import NetBoxGroup, NetBoxUser, ObjectPermission
-from utilities.forms import BOOLEAN_WITH_BLANK_CHOICES
+from netbox.forms.mixins import SavedFiltersMixin
+from users.choices import TokenVersionChoices
+from users.models import Group, ObjectPermission, Owner, OwnerGroup, Token, User
+from utilities.forms import BOOLEAN_WITH_BLANK_CHOICES, FilterForm
 from utilities.forms.fields import DynamicModelMultipleChoiceField
+from utilities.forms.rendering import FieldSet
+from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import DateTimePicker
 
 __all__ = (
     'GroupFilterForm',
     'ObjectPermissionFilterForm',
-    'UserFilterForm',
+    'OwnerFilterForm',
+    'OwnerGroupFilterForm',
     'TokenFilterForm',
+    'UserFilterForm',
 )
 
 
 class GroupFilterForm(NetBoxModelFilterSetForm):
-    model = NetBoxGroup
+    model = Group
     fieldsets = (
-        (None, ('q', 'filter_id',)),
+        FieldSet('q', 'filter_id',),
     )
 
 
 class UserFilterForm(NetBoxModelFilterSetForm):
-    model = NetBoxUser
+    model = User
     fieldsets = (
-        (None, ('q', 'filter_id',)),
-        (_('Group'), ('group_id',)),
-        (_('Status'), ('is_active', 'is_staff', 'is_superuser')),
+        FieldSet('q', 'filter_id',),
+        FieldSet('group_id', name=_('Group')),
+        FieldSet('is_active', 'is_superuser', name=_('Status')),
     )
     group_id = DynamicModelMultipleChoiceField(
         queryset=Group.objects.all(),
@@ -46,13 +47,6 @@ class UserFilterForm(NetBoxModelFilterSetForm):
         ),
         label=_('Is Active'),
     )
-    is_staff = forms.NullBooleanField(
-        required=False,
-        widget=forms.Select(
-            choices=BOOLEAN_WITH_BLANK_CHOICES
-        ),
-        label=_('Is Staff'),
-    )
     is_superuser = forms.NullBooleanField(
         required=False,
         widget=forms.Select(
@@ -65,9 +59,9 @@ class UserFilterForm(NetBoxModelFilterSetForm):
 class ObjectPermissionFilterForm(NetBoxModelFilterSetForm):
     model = ObjectPermission
     fieldsets = (
-        (None, ('q', 'filter_id',)),
-        (_('Permission'), ('enabled', 'group_id', 'user_id')),
-        (_('Actions'), ('can_view', 'can_add', 'can_change', 'can_delete')),
+        FieldSet('q', 'filter_id',),
+        FieldSet('enabled', 'group_id', 'user_id', name=_('Permission')),
+        FieldSet('can_view', 'can_add', 'can_change', 'can_delete', name=_('Actions')),
     )
     enabled = forms.NullBooleanField(
         label=_('Enabled'),
@@ -82,7 +76,7 @@ class ObjectPermissionFilterForm(NetBoxModelFilterSetForm):
         label=_('Group')
     )
     user_id = DynamicModelMultipleChoiceField(
-        queryset=get_user_model().objects.all(),
+        queryset=User.objects.all(),
         required=False,
         label=_('User')
     )
@@ -119,13 +113,24 @@ class ObjectPermissionFilterForm(NetBoxModelFilterSetForm):
 class TokenFilterForm(SavedFiltersMixin, FilterForm):
     model = Token
     fieldsets = (
-        (None, ('q', 'filter_id',)),
-        (_('Token'), ('user_id', 'write_enabled', 'expires', 'last_used')),
+        FieldSet('q', 'filter_id',),
+        FieldSet('version', 'user_id', 'enabled', 'write_enabled', 'expires', 'last_used', name=_('Token')),
+    )
+    version = forms.ChoiceField(
+        choices=add_blank_choice(TokenVersionChoices),
+        required=False,
     )
     user_id = DynamicModelMultipleChoiceField(
-        queryset=get_user_model().objects.all(),
+        queryset=User.objects.all(),
         required=False,
         label=_('User')
+    )
+    enabled = forms.NullBooleanField(
+        required=False,
+        widget=forms.Select(
+            choices=BOOLEAN_WITH_BLANK_CHOICES
+        ),
+        label=_('Enabled'),
     )
     write_enabled = forms.NullBooleanField(
         required=False,
@@ -143,4 +148,35 @@ class TokenFilterForm(SavedFiltersMixin, FilterForm):
         required=False,
         label=_('Last Used'),
         widget=DateTimePicker()
+    )
+
+
+class OwnerGroupFilterForm(NetBoxModelFilterSetForm):
+    model = OwnerGroup
+    fieldsets = (
+        FieldSet('q', 'filter_id',),
+    )
+
+
+class OwnerFilterForm(NetBoxModelFilterSetForm):
+    model = Owner
+    fieldsets = (
+        FieldSet('q', 'filter_id',),
+        FieldSet('group_id', name=_('Group')),
+        FieldSet('user_group_id', 'user_id', name=_('Membership')),
+    )
+    group_id = DynamicModelMultipleChoiceField(
+        queryset=OwnerGroup.objects.all(),
+        required=False,
+        label=_('Group')
+    )
+    user_group_id = DynamicModelMultipleChoiceField(
+        queryset=Group.objects.all(),
+        required=False,
+        label=_('Groups')
+    )
+    user_id = DynamicModelMultipleChoiceField(
+        queryset=User.objects.all(),
+        required=False,
+        label=_('Users')
     )

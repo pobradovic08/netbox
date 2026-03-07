@@ -1,6 +1,5 @@
 from django.db import models
 from django.db.models import Q
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from netbox.models import NestedGroupModel, PrimaryModel
@@ -19,7 +18,8 @@ class TenantGroup(NestedGroupModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,
-        unique=True
+        unique=True,
+        db_collation="natural_sort"
     )
     slug = models.SlugField(
         verbose_name=_('slug'),
@@ -29,11 +29,11 @@ class TenantGroup(NestedGroupModel):
 
     class Meta:
         ordering = ['name']
+        # Empty tuple triggers Django migration detection for MPTT indexes
+        # (see #21016, django-mptt/django-mptt#682)
+        indexes = ()
         verbose_name = _('tenant group')
         verbose_name_plural = _('tenant groups')
-
-    def get_absolute_url(self):
-        return reverse('tenancy:tenantgroup', args=[self.pk])
 
 
 class Tenant(ContactsMixin, PrimaryModel):
@@ -43,7 +43,8 @@ class Tenant(ContactsMixin, PrimaryModel):
     """
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=100
+        max_length=100,
+        db_collation="natural_sort"
     )
     slug = models.SlugField(
         verbose_name=_('slug'),
@@ -90,6 +91,3 @@ class Tenant(ContactsMixin, PrimaryModel):
 
     def __str__(self):
         return self.name
-
-    def get_absolute_url(self):
-        return reverse('tenancy:tenant', args=[self.pk])

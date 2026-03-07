@@ -6,16 +6,8 @@ This guide explains how to implement LDAP authentication using an external serve
 
 ### Install System Packages
 
-On Ubuntu:
-
 ```no-highlight
 sudo apt install -y libldap2-dev libsasl2-dev libssl-dev
-```
-
-On CentOS:
-
-```no-highlight
-sudo yum install -y openldap-devel python3-devel
 ```
 
 ### Install django-auth-ldap
@@ -129,7 +121,6 @@ AUTH_LDAP_MIRROR_GROUPS = True
 # Define special user types using groups. Exercise great caution when assigning superuser status.
 AUTH_LDAP_USER_FLAGS_BY_GROUP = {
     "is_active": "cn=active,ou=groups,dc=example,dc=com",
-    "is_staff": "cn=staff,ou=groups,dc=example,dc=com",
     "is_superuser": "cn=superuser,ou=groups,dc=example,dc=com"
 }
 
@@ -142,7 +133,6 @@ AUTH_LDAP_CACHE_TIMEOUT = 3600
 ```
 
 * `is_active` - All users must be mapped to at least this group to enable authentication. Without this, users cannot log in.
-* `is_staff` - Users mapped to this group are enabled for access to the administration tools; this is the equivalent of checking the "staff status" box on a manually created user. This doesn't grant any specific permissions.
 * `is_superuser` - Users mapped to this group will be granted superuser status. Superusers are implicitly granted all permissions.
 
 !!! warning
@@ -256,7 +246,6 @@ AUTH_LDAP_MIRROR_GROUPS = True
 # Define special user types using groups. Exercise great caution when assigning superuser status.
 AUTH_LDAP_USER_FLAGS_BY_GROUP = {
     "is_active": "cn=active,ou=groups,dc=example,dc=com",
-    "is_staff": "cn=staff,ou=groups,dc=example,dc=com",
     "is_superuser": "cn=superuser,ou=groups,dc=example,dc=com"
 }
 

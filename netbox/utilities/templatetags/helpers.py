@@ -1,28 +1,27 @@
-import datetime
 import json
+from typing import Any
 from urllib.parse import quote
-from typing import Dict, Any
 
 from django import template
-from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
-from django.template.defaultfilters import date
 from django.urls import NoReverseMatch, reverse
-from django.utils import timezone
-from django.utils.safestring import mark_safe
+from django.utils.html import conditional_escape
+from django.utils.translation import gettext_lazy as _
 
-from utilities.forms import get_selected_values, TableConfigForm
-from utilities.utils import get_viewname
+from core.models import ObjectType
+from netbox.settings import DISK_BASE_UNIT, RAM_BASE_UNIT
+from utilities.forms import TableConfigForm, get_selected_values
+from utilities.forms.mixins import FORM_FIELD_LOOKUPS
+from utilities.views import get_action_url, get_viewname
 
 __all__ = (
-    'annotated_date',
-    'annotated_now',
+    'action_url',
     'applied_filters',
     'as_range',
     'divide',
     'get_item',
     'get_key',
-    'humanize_megabytes',
+    'humanize_disk_megabytes',
+    'humanize_ram_megabytes',
     'humanize_speed',
     'icon_from_status',
     'kg_to_pounds',
@@ -68,6 +67,125 @@ def validated_viewname(model, action):
         return None
 
 
+class ActionURLNode(template.Node):
+    """Template node for the {% action_url %} template tag."""
+
+    child_nodelists = ()
+
+    def __init__(self, model, action, kwargs, asvar=None):
+        self.model = model
+        self.action = action
+        self.kwargs = kwargs
+        self.asvar = asvar
+
+    def __repr__(self):
+        return (
+            f"<{self.__class__.__qualname__} "
+            f"model='{self.model}' "
+            f"action='{self.action}' "
+            f"kwargs={repr(self.kwargs)} "
+            f"as={repr(self.asvar)}>"
+        )
+
+    def render(self, context):
+        """
+        Render the action URL node.
+
+        Args:
+            context: The template context
+
+        Returns:
+            The resolved URL or empty string if using 'as' syntax
+
+        Raises:
+            NoReverseMatch: If the URL cannot be resolved and not using 'as' syntax
+        """
+        # Resolve model and kwargs from context
+        model = self.model.resolve(context)
+        kwargs = {k: v.resolve(context) for k, v in self.kwargs.items()}
+
+        # Get the action URL using the utility function
+        try:
+            url = get_action_url(model, action=self.action, kwargs=kwargs)
+        except NoReverseMatch:
+            if self.asvar is None:
+                raise
+            url = ""
+
+        # Handle variable assignment or return escaped URL
+        if self.asvar:
+            context[self.asvar] = url
+            return ""
+
+        return conditional_escape(url) if context.autoescape else url
+
+
+@register.tag
+def action_url(parser, token):
+    """
+    Return an absolute URL matching the given model and action.
+
+    This is a way to define links that aren't tied to a particular URL
+    configuration::
+
+        {% action_url model "action_name" %}
+
+        or
+
+        {% action_url model "action_name" pk=object.pk %}
+
+        or
+
+        {% action_url model "action_name" pk=object.pk as variable_name %}
+
+    The first argument is a model or instance. The second argument is the action name.
+    Additional keyword arguments can be passed for URL parameters.
+
+    For example, if you have a Device model and want to link to its edit action::
+
+        {% action_url device "edit" %}
+
+    This will generate a URL like ``/dcim/devices/123/edit/``.
+
+    You can also pass additional parameters::
+
+        {% action_url device "journal" pk=device.pk %}
+
+    Or assign the URL to a variable::
+
+        {% action_url device "edit" as edit_url %}
+    """
+    # Parse the token contents
+    bits = token.split_contents()
+    if len(bits) < 3:
+        raise template.TemplateSyntaxError(
+            f"'{bits[0]}' takes at least two arguments, a model and an action."
+        )
+
+    # Extract model and action
+    model = parser.compile_filter(bits[1])
+    action = bits[2].strip('"\'')  # Remove quotes from literal string
+    kwargs = {}
+    asvar = None
+    bits = bits[3:]
+
+    # Handle 'as' syntax for variable assignment
+    if len(bits) >= 2 and bits[-2] == "as":
+        asvar = bits[-1]
+        bits = bits[:-2]
+
+    # Parse remaining arguments as kwargs
+    for bit in bits:
+        if '=' not in bit:
+            raise template.TemplateSyntaxError(
+                f"'{token.contents.split()[0]}' keyword arguments must be in the format 'name=value'"
+            )
+        name, value = bit.split('=', 1)
+        kwargs[name] = parser.compile_filter(value)
+
+    return ActionURLNode(model, action, kwargs, asvar)
+
+
 @register.filter()
 def humanize_speed(speed):
     """
@@ -81,56 +199,51 @@ def humanize_speed(speed):
         return ''
     if speed >= 1000000000 and speed % 1000000000 == 0:
         return '{} Tbps'.format(int(speed / 1000000000))
-    elif speed >= 1000000 and speed % 1000000 == 0:
+    if speed >= 1000000 and speed % 1000000 == 0:
         return '{} Gbps'.format(int(speed / 1000000))
-    elif speed >= 1000 and speed % 1000 == 0:
+    if speed >= 1000 and speed % 1000 == 0:
         return '{} Mbps'.format(int(speed / 1000))
-    elif speed >= 1000:
+    if speed >= 1000:
         return '{} Mbps'.format(float(speed) / 1000)
-    else:
-        return '{} Kbps'.format(speed)
+    return '{} Kbps'.format(speed)
+
+
+def _humanize_megabytes(mb, divisor=1000):
+    """
+    Express a number of megabytes in the most suitable unit (e.g. gigabytes, terabytes, etc.).
+    """
+    if not mb:
+        return ""
+
+    PB_SIZE = divisor**3
+    TB_SIZE = divisor**2
+    GB_SIZE = divisor
+
+    if mb >= PB_SIZE:
+        return f"{mb / PB_SIZE:.2f} PB"
+    if mb >= TB_SIZE:
+        return f"{mb / TB_SIZE:.2f} TB"
+    if mb >= GB_SIZE:
+        return f"{mb / GB_SIZE:.2f} GB"
+    return f"{mb} MB"
 
 
 @register.filter()
-def humanize_megabytes(mb):
+def humanize_disk_megabytes(mb):
     """
-    Express a number of megabytes in the most suitable unit (e.g. gigabytes or terabytes).
+    Express a number of megabytes in the most suitable unit (e.g. gigabytes, terabytes, etc.).
+    Use the DISK_BASE_UNIT setting to determine the divisor. Default is 1000.
     """
-    if not mb:
-        return ''
-    if not mb % 1048576:  # 1024^2
-        return f'{int(mb / 1048576)} TB'
-    if not mb % 1024:
-        return f'{int(mb / 1024)} GB'
-    return f'{mb} MB'
+    return _humanize_megabytes(mb, DISK_BASE_UNIT)
 
 
-@register.filter(expects_localtime=True)
-def annotated_date(date_value):
+@register.filter()
+def humanize_ram_megabytes(mb):
     """
-    Returns date as HTML span with short date format as the content and the
-    (long) date format as the title.
+    Express a number of megabytes in the most suitable unit (e.g. gigabytes, terabytes, etc.).
+    Use the RAM_BASE_UNIT setting to determine the divisor. Default is 1000.
     """
-    if not date_value:
-        return ''
-
-    if type(date_value) is datetime.date:
-        long_ts = date(date_value, 'DATE_FORMAT')
-        short_ts = date(date_value, 'SHORT_DATE_FORMAT')
-    else:
-        long_ts = date(date_value, 'DATETIME_FORMAT')
-        short_ts = date(date_value, 'SHORT_DATETIME_FORMAT')
-
-    return mark_safe(f'<span title="{long_ts}">{short_ts}</span>')
-
-
-@register.simple_tag
-def annotated_now():
-    """
-    Returns the current date piped through the annotated_date filter.
-    """
-    tzinfo = timezone.get_current_timezone() if settings.USE_TZ else None
-    return annotated_date(datetime.datetime.now(tz=tzinfo))
+    return _humanize_megabytes(mb, RAM_BASE_UNIT)
 
 
 @register.filter()
@@ -193,7 +306,7 @@ def startswith(text: str, starts: str) -> bool:
 
 
 @register.filter
-def get_key(value: Dict, arg: str) -> Any:
+def get_key(value: dict, arg: str) -> Any:
     """
     Template implementation of `dict.get()`, for accessing dict values
     by key when the key is not able to be used in a template. For
@@ -259,8 +372,7 @@ def querystring(request, **kwargs):
     querystring = querydict.urlencode(safe='/')
     if querystring:
         return '?' + querystring
-    else:
-        return ''
+    return ''
 
 
 @register.inclusion_tag('helpers/utilization_graph.html')
@@ -306,26 +418,75 @@ def applied_filters(context, model, form, query_params):
             continue
 
         querydict = query_params.copy()
-        if filter_name not in querydict:
+
+        # Check if this is a modifier-enhanced field
+        # Field may be in querydict as field__lookup instead of field
+        param_name = None
+        if filter_name in querydict:
+            param_name = filter_name
+        else:
+            # Check for modifier variants (field__ic, field__isw, etc.)
+            for key in querydict.keys():
+                if key.startswith(f'{filter_name}__'):
+                    param_name = key
+                    break
+
+        if param_name is None:
+            continue
+
+        # Skip saved filters, as they're displayed alongside the quick search widget
+        if filter_name == 'filter_id':
             continue
 
         bound_field = form.fields[filter_name].get_bound_field(form, filter_name)
-        querydict.pop(filter_name)
+        querydict.pop(param_name)
+
+        # Extract modifier from parameter name (e.g., "serial__ic" → "ic")
+        if '__' in param_name:
+            modifier = param_name.split('__', 1)[1]
+        else:
+            modifier = 'exact'
+
+        # Get display value
         display_value = ', '.join([str(v) for v in get_selected_values(form, filter_name)])
 
+        # Get the correct lookup label for this field's type
+        lookup_label = None
+        if modifier != 'exact':
+            field = form.fields[filter_name]
+            for field_class in field.__class__.__mro__:
+                if field_lookups := FORM_FIELD_LOOKUPS.get(field_class):
+                    for lookup_code, label in field_lookups:
+                        if lookup_code == modifier:
+                            lookup_label = label
+                            break
+                    if lookup_label:
+                        break
+
+        # Special handling for empty lookup (boolean value)
+        if modifier == 'empty':
+            if display_value.lower() in ('true', '1'):
+                link_text = f'{bound_field.label} {_("is empty")}'
+            else:
+                link_text = f'{bound_field.label} {_("is not empty")}'
+        elif lookup_label:
+            link_text = f'{bound_field.label} {lookup_label}: {display_value}'
+        else:
+            link_text = f'{bound_field.label}: {display_value}'
+
         applied_filters.append({
-            'name': filter_name,
-            'value': form.cleaned_data[filter_name],
+            'name': param_name,  # Use actual param name for removal link
+            'value': form.cleaned_data.get(filter_name),
             'link_url': f'?{querydict.urlencode()}',
-            'link_text': f'{bound_field.label}: {display_value}',
+            'link_text': link_text,
         })
 
     save_link = None
     if user.has_perm('extras.add_savedfilter') and 'filter_id' not in context['request'].GET:
-        content_type = ContentType.objects.get_for_model(model).pk
+        object_type = ObjectType.objects.get_for_model(model).pk
         parameters = json.dumps(dict(context['request'].GET.lists()))
         url = reverse('extras:savedfilter_add')
-        save_link = f"{url}?content_types={content_type}&parameters={quote(parameters)}"
+        save_link = f"{url}?object_types={object_type}&parameters={quote(parameters)}"
 
     return {
         'applied_filters': applied_filters,

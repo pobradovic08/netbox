@@ -1,32 +1,33 @@
+import copy
 import inspect
 import json
 
+import strawberry_django
 from django.conf import settings
-from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.urls import reverse
 from django.test import override_settings
-from graphene.types import Dynamic as GQLDynamic, List as GQLList, Union as GQLUnion, String as GQLString, NonNull as GQLNonNull
+from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
+from strawberry.types.base import StrawberryList, StrawberryOptional
+from strawberry.types.lazy_type import LazyType
+from strawberry.types.union import StrawberryUnion
 
-from extras.choices import ObjectChangeActionChoices
-from extras.models import ObjectChange
-from users.models import ObjectPermission, Token
-from utilities.api import get_graphql_type_for_model
-from .base import ModelTestCase
-from .utils import disable_warnings
-
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange, ObjectType
 from ipam.graphql.types import IPAddressFamilyType
+from netbox.models.features import ChangeLoggingMixin
+from users.constants import TOKEN_PREFIX
+from users.models import ObjectPermission, Token, User
+from utilities.api import get_graphql_type_for_model
 
+from .base import ModelTestCase
+from .utils import disable_logging, disable_warnings, get_random_string
 
 __all__ = (
     'APITestCase',
     'APIViewTestCases',
 )
-
-
-User = get_user_model()
 
 
 #
@@ -51,7 +52,7 @@ class APITestCase(ModelTestCase):
         self.user = User.objects.create_user(username='testuser')
         self.add_permissions(*self.user_permissions)
         self.token = Token.objects.create(user=self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
+        self.header = {'HTTP_AUTHORIZATION': f'Bearer {TOKEN_PREFIX}{self.token.key}.{self.token.token}'}
 
     def _get_view_namespace(self):
         return f'{self.view_namespace or self.model._meta.app_label}-api'
@@ -69,7 +70,7 @@ class APIViewTestCases:
 
     class GetObjectViewTestCase(APITestCase):
 
-        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
+        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'], LOGIN_REQUIRED=False)
         def test_get_object_anonymous(self):
             """
             GET a single object as an unauthenticated user.
@@ -109,7 +110,7 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
             # Try GET to permitted object
             url = self._get_detail_url(instance1)
@@ -131,7 +132,7 @@ class APIViewTestCases:
     class ListObjectsViewTestCase(APITestCase):
         brief_fields = []
 
-        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
+        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'], LOGIN_REQUIRED=False)
         def test_list_objects_anonymous(self):
             """
             GET a list of objects as an unauthenticated user.
@@ -154,6 +155,7 @@ class APIViewTestCases:
             url = f'{self._get_list_url()}?brief=1'
             response = self.client.get(url, **self.header)
 
+            self.assertHttpStatus(response, status.HTTP_200_OK)
             self.assertEqual(len(response.data['results']), self._get_queryset().count())
             self.assertEqual(sorted(response.data['results'][0]), self.brief_fields)
 
@@ -183,7 +185,7 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
             # Try GET to permitted objects
             response = self.client.get(self._get_list_url(), **self.header)
@@ -224,10 +226,16 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+            data = copy.deepcopy(self.create_data[0])
+
+            # If supported, add a changelog message
+            if issubclass(self.model, ChangeLoggingMixin):
+                data['changelog_message'] = get_random_string(10)
 
             initial_count = self._get_queryset().count()
-            response = self.client.post(self._get_list_url(), self.create_data[0], format='json', **self.header)
+            response = self.client.post(self._get_list_url(), data, format='json', **self.header)
             self.assertHttpStatus(response, status.HTTP_201_CREATED)
             self.assertEqual(self._get_queryset().count(), initial_count + 1)
             instance = self._get_queryset().get(pk=response.data['id'])
@@ -239,13 +247,13 @@ class APIViewTestCases:
             )
 
             # Verify ObjectChange creation
-            if hasattr(self.model, 'to_objectchange'):
-                objectchanges = ObjectChange.objects.filter(
+            if issubclass(self.model, ChangeLoggingMixin):
+                objectchange = ObjectChange.objects.get(
                     changed_object_type=ContentType.objects.get_for_model(instance),
-                    changed_object_id=instance.pk
+                    changed_object_id=instance.pk,
+                    action=ObjectChangeActionChoices.ACTION_CREATE,
                 )
-                self.assertEqual(len(objectchanges), 1)
-                self.assertEqual(objectchanges[0].action, ObjectChangeActionChoices.ACTION_CREATE)
+                self.assertEqual(objectchange.message, data['changelog_message'])
 
         def test_bulk_create_objects(self):
             """
@@ -258,7 +266,13 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+            # If supported, add a changelog message
+            changelog_message = get_random_string(10)
+            if issubclass(self.model, ChangeLoggingMixin):
+                for obj_data in self.create_data:
+                    obj_data['changelog_message'] = changelog_message
 
             initial_count = self._get_queryset().count()
             response = self.client.post(self._get_list_url(), self.create_data, format='json', **self.header)
@@ -267,6 +281,9 @@ class APIViewTestCases:
             self.assertEqual(self._get_queryset().count(), initial_count + len(self.create_data))
             for i, obj in enumerate(response.data):
                 for field in self.create_data[i]:
+                    if field == 'changelog_message':
+                        # Write-only field
+                        continue
                     if field not in self.validation_excluded_fields:
                         self.assertIn(field, obj, f"Bulk create field '{field}' missing from object {i} in response")
             for i, obj in enumerate(response.data):
@@ -276,6 +293,20 @@ class APIViewTestCases:
                     exclude=self.validation_excluded_fields,
                     api=True
                 )
+
+            # Verify ObjectChange creation
+            if issubclass(self.model, ChangeLoggingMixin):
+                id_list = [
+                    obj['id'] for obj in response.data
+                ]
+                objectchanges = ObjectChange.objects.filter(
+                    changed_object_type=ContentType.objects.get_for_model(self.model),
+                    changed_object_id__in=id_list,
+                    action=ObjectChangeActionChoices.ACTION_CREATE,
+                )
+                self.assertEqual(len(objectchanges), len(self.create_data))
+                for oc in objectchanges:
+                    self.assertEqual(oc.message, changelog_message)
 
     class UpdateObjectViewTestCase(APITestCase):
         update_data = {}
@@ -309,26 +340,32 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
-            response = self.client.patch(url, update_data, format='json', **self.header)
+            data = copy.deepcopy(update_data)
+
+            # If supported, add a changelog message
+            if issubclass(self.model, ChangeLoggingMixin):
+                data['changelog_message'] = get_random_string(10)
+
+            response = self.client.patch(url, data, format='json', **self.header)
             self.assertHttpStatus(response, status.HTTP_200_OK)
             instance.refresh_from_db()
             self.assertInstanceEqual(
                 instance,
-                update_data,
+                data,
                 exclude=self.validation_excluded_fields,
                 api=True
             )
 
             # Verify ObjectChange creation
             if hasattr(self.model, 'to_objectchange'):
-                objectchanges = ObjectChange.objects.filter(
+                objectchange = ObjectChange.objects.get(
                     changed_object_type=ContentType.objects.get_for_model(instance),
                     changed_object_id=instance.pk
                 )
-                self.assertEqual(len(objectchanges), 1)
-                self.assertEqual(objectchanges[0].action, ObjectChangeActionChoices.ACTION_UPDATE)
+                self.assertEqual(objectchange.action, ObjectChangeActionChoices.ACTION_UPDATE)
+                self.assertEqual(objectchange.message, data['changelog_message'])
 
         def test_bulk_update_objects(self):
             """
@@ -344,7 +381,7 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
             id_list = list(self._get_queryset().values_list('id', flat=True)[:3])
             self.assertEqual(len(id_list), 3, "Insufficient number of objects to test bulk update")
@@ -352,13 +389,33 @@ class APIViewTestCases:
                 {'id': id, **self.bulk_update_data} for id in id_list
             ]
 
+            # If supported, add a changelog message
+            changelog_message = get_random_string(10)
+            if issubclass(self.model, ChangeLoggingMixin):
+                for obj_data in data:
+                    obj_data['changelog_message'] = changelog_message
+
             response = self.client.patch(self._get_list_url(), data, format='json', **self.header)
             self.assertHttpStatus(response, status.HTTP_200_OK)
             for i, obj in enumerate(response.data):
                 for field in self.bulk_update_data:
+                    if field == 'changelog_data':
+                        # Write-only field
+                        continue
                     self.assertIn(field, obj, f"Bulk update field '{field}' missing from object {i} in response")
             for instance in self._get_queryset().filter(pk__in=id_list):
                 self.assertInstanceEqual(instance, self.bulk_update_data, api=True)
+
+            # Verify ObjectChange creation
+            if issubclass(self.model, ChangeLoggingMixin):
+                objectchanges = ObjectChange.objects.filter(
+                    changed_object_type=ContentType.objects.get_for_model(self.model),
+                    changed_object_id__in=id_list
+                )
+                self.assertEqual(len(objectchanges), len(data))
+                for oc in objectchanges:
+                    self.assertEqual(oc.action, ObjectChangeActionChoices.ACTION_UPDATE)
+                    self.assertEqual(oc.message, changelog_message)
 
     class DeleteObjectViewTestCase(APITestCase):
 
@@ -387,20 +444,26 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
-            response = self.client.delete(url, **self.header)
+            data = {}
+
+            # If supported, add a changelog message
+            if issubclass(self.model, ChangeLoggingMixin):
+                data['changelog_message'] = get_random_string(10)
+
+            response = self.client.delete(url, data, **self.header)
             self.assertHttpStatus(response, status.HTTP_204_NO_CONTENT)
             self.assertFalse(self._get_queryset().filter(pk=instance.pk).exists())
 
             # Verify ObjectChange creation
             if hasattr(self.model, 'to_objectchange'):
-                objectchanges = ObjectChange.objects.filter(
+                objectchange = ObjectChange.objects.get(
                     changed_object_type=ContentType.objects.get_for_model(instance),
                     changed_object_id=instance.pk
                 )
-                self.assertEqual(len(objectchanges), 1)
-                self.assertEqual(objectchanges[0].action, ObjectChangeActionChoices.ACTION_DELETE)
+                self.assertEqual(objectchange.action, ObjectChangeActionChoices.ACTION_DELETE)
+                self.assertEqual(objectchange.message, data['changelog_message'])
 
         def test_bulk_delete_objects(self):
             """
@@ -413,7 +476,7 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
             # Target the three most recently created objects to avoid triggering recursive deletions
             # (e.g. with MPTT objects)
@@ -421,10 +484,27 @@ class APIViewTestCases:
             self.assertEqual(len(id_list), 3, "Insufficient number of objects to test bulk deletion")
             data = [{"id": id} for id in id_list]
 
+            # If supported, add a changelog message
+            changelog_message = get_random_string(10)
+            if issubclass(self.model, ChangeLoggingMixin):
+                for obj_data in data:
+                    obj_data['changelog_message'] = changelog_message
+
             initial_count = self._get_queryset().count()
             response = self.client.delete(self._get_list_url(), data, format='json', **self.header)
             self.assertHttpStatus(response, status.HTTP_204_NO_CONTENT)
             self.assertEqual(self._get_queryset().count(), initial_count - 3)
+
+            # Verify ObjectChange creation
+            if issubclass(self.model, ChangeLoggingMixin):
+                objectchanges = ObjectChange.objects.filter(
+                    changed_object_type=ContentType.objects.get_for_model(self.model),
+                    changed_object_id__in=id_list
+                )
+                self.assertEqual(len(objectchanges), len(data))
+                for oc in objectchanges:
+                    self.assertEqual(oc.action, ObjectChangeActionChoices.ACTION_DELETE)
+                    self.assertEqual(oc.message, changelog_message)
 
     class GraphQLTestCase(APITestCase):
 
@@ -436,44 +516,52 @@ class APIViewTestCases:
             base_name = self.model._meta.verbose_name.lower().replace(' ', '_')
             return getattr(self, 'graphql_base_name', base_name)
 
-        def _build_query(self, name, **filters):
+        def _build_query_with_filter(self, name, filter_string):
+            """
+            Called by either _build_query or _build_filtered_query - construct the actual
+            query given a name and filter string
+            """
             type_class = get_graphql_type_for_model(self.model)
-            if filters:
-                filter_string = ', '.join(f'{k}:{v}' for k, v in filters.items())
-                filter_string = f'({filter_string})'
-            else:
-                filter_string = ''
 
             # Compile list of fields to include
             fields_string = ''
-            for field_name, field in type_class._meta.fields.items():
-                is_string_array = False
-                if type(field.type) is GQLList:
-                    if field.type.of_type is GQLString:
-                        is_string_array = True
-                    elif type(field.type.of_type) is GQLNonNull and field.type.of_type.of_type is GQLString:
-                        is_string_array = True
 
-                if type(field) is GQLDynamic:
-                    # Dynamic fields must specify a subselection
-                    fields_string += f'{field_name} {{ id }}\n'
-                # TODO: Improve field detection logic to avoid nested ArrayFields
-                elif field_name == 'extra_choices':
+            file_fields = (
+                strawberry_django.fields.types.DjangoFileType,
+                strawberry_django.fields.types.DjangoImageType,
+            )
+            for field in type_class.__strawberry_definition__.fields:
+                if (
+                    field.type in file_fields or (
+                        type(field.type) is StrawberryOptional and field.type.of_type in file_fields
+                    )
+                ):
+                    # image / file fields nullable or not...
+                    fields_string += f'{field.name} {{ name }}\n'
+                elif type(field.type) is StrawberryList and type(field.type.of_type) is LazyType:
+                    # List of related objects (queryset)
+                    fields_string += f'{field.name} {{ id }}\n'
+                elif type(field.type) is StrawberryList and type(field.type.of_type) is StrawberryUnion:
+                    # this would require a fragment query
                     continue
-                elif inspect.isclass(field.type) and issubclass(field.type, GQLUnion):
-                    # Union types dont' have an id or consistent values
+                elif type(field.type) is StrawberryUnion:
+                    # this would require a fragment query
                     continue
-                elif type(field.type) is GQLList and inspect.isclass(field.type.of_type) and issubclass(field.type.of_type, GQLUnion):
-                    # Union types dont' have an id or consistent values
+                elif type(field.type) is StrawberryOptional and type(field.type.of_type) is StrawberryUnion:
+                    # this would require a fragment query
                     continue
-                elif type(field.type) is GQLList and not is_string_array:
-                    # TODO: Come up with something more elegant
-                    # Temporary hack to support automated testing of reverse generic relations
-                    fields_string += f'{field_name} {{ id }}\n'
+                elif type(field.type) is StrawberryOptional and type(field.type.of_type) is LazyType:
+                    fields_string += f'{field.name} {{ id }}\n'
+                elif hasattr(field, 'is_relation') and field.is_relation:
+                    # Ignore private fields
+                    if field.name.startswith('_'):
+                        continue
+                    # Note: StrawberryField types do not have is_relation
+                    fields_string += f'{field.name} {{ id }}\n'
                 elif inspect.isclass(field.type) and issubclass(field.type, IPAddressFamilyType):
-                    fields_string += f'{field_name} {{ value, label }}\n'
+                    fields_string += f'{field.name} {{ value, label }}\n'
                 else:
-                    fields_string += f'{field_name}\n'
+                    fields_string += f'{field.name}\n'
 
             query = f"""
             {{
@@ -485,8 +573,39 @@ class APIViewTestCases:
 
             return query
 
+        def _build_filtered_query(self, name, **filters):
+            """
+            Create a filtered query: i.e. device_list(filters: {name: {i_contains: "akron"}}){.
+            """
+            # TODO: This should be extended to support AND, OR multi-lookups
+            if filters:
+                for field_name, params in filters.items():
+                    lookup = params['lookup']
+                    value = params['value']
+                    if lookup:
+                        query = f'{{{lookup}: "{value}"}}'
+                        filter_string = f'{field_name}: {query}'
+                    else:
+                        filter_string = f'{field_name}: "{value}"'
+                filter_string = f'(filters: {{{filter_string}}})'
+            else:
+                filter_string = ''
+
+            return self._build_query_with_filter(name, filter_string)
+
+        def _build_query(self, name, **filters):
+            """
+            Create a normal query - unfiltered or with a string query: i.e. site(name: "aaa"){.
+            """
+            if filters:
+                filter_string = ', '.join(f'{k}:{v}' for k, v in filters.items())
+                filter_string = f'({filter_string})'
+            else:
+                filter_string = ''
+
+            return self._build_query_with_filter(name, filter_string)
+
         @override_settings(LOGIN_REQUIRED=True)
-        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*', 'auth.user'])
         def test_graphql_get_object(self):
             url = reverse('graphql')
             field_name = self._get_graphql_base_name()
@@ -494,33 +613,92 @@ class APIViewTestCases:
             query = self._build_query(field_name, id=object_id)
 
             # Non-authenticated requests should fail
+            header = {
+                'HTTP_ACCEPT': 'application/json',
+            }
             with disable_warnings('django.request'):
-                self.assertHttpStatus(self.client.post(url, data={'query': query}), status.HTTP_403_FORBIDDEN)
+                response = self.client.post(url, data={'query': query}, format="json", **header)
+            self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
 
-            # Add object-level permission
+            # Add constrained permission
             obj_perm = ObjectPermission(
                 name='Test permission',
-                actions=['view']
+                actions=['view'],
+                constraints={'id': 0}  # Impossible constraint
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
-            response = self.client.post(url, data={'query': query}, **self.header)
+            # Request should succeed but return empty result
+            with disable_logging():
+                response = self.client.post(url, data={'query': query}, format="json", **self.header)
+            self.assertHttpStatus(response, status.HTTP_200_OK)
+            data = json.loads(response.content)
+            self.assertIn('errors', data)
+            self.assertIsNone(data['data'])
+
+            # Remove permission constraint
+            obj_perm.constraints = None
+            obj_perm.save()
+
+            # Request should return requested object
+            response = self.client.post(url, data={'query': query}, format="json", **self.header)
             self.assertHttpStatus(response, status.HTTP_200_OK)
             data = json.loads(response.content)
             self.assertNotIn('errors', data)
+            self.assertIsNotNone(data['data'])
 
         @override_settings(LOGIN_REQUIRED=True)
-        @override_settings(EXEMPT_VIEW_PERMISSIONS=['*', 'auth.user'])
         def test_graphql_list_objects(self):
             url = reverse('graphql')
             field_name = f'{self._get_graphql_base_name()}_list'
             query = self._build_query(field_name)
 
             # Non-authenticated requests should fail
+            header = {
+                'HTTP_ACCEPT': 'application/json',
+            }
             with disable_warnings('django.request'):
-                self.assertHttpStatus(self.client.post(url, data={'query': query}), status.HTTP_403_FORBIDDEN)
+                response = self.client.post(url, data={'query': query}, format="json", **header)
+            self.assertHttpStatus(response, status.HTTP_403_FORBIDDEN)
+
+            # Add constrained permission
+            obj_perm = ObjectPermission(
+                name='Test permission',
+                actions=['view'],
+                constraints={'id': 0}  # Impossible constraint
+            )
+            obj_perm.save()
+            obj_perm.users.add(self.user)
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+            # Request should succeed but return empty results list
+            response = self.client.post(url, data={'query': query}, format="json", **self.header)
+            self.assertHttpStatus(response, status.HTTP_200_OK)
+            data = json.loads(response.content)
+            self.assertNotIn('errors', data)
+            self.assertEqual(len(data['data'][field_name]), 0)
+
+            # Remove permission constraint
+            obj_perm.constraints = None
+            obj_perm.save()
+
+            # Request should return all objects
+            response = self.client.post(url, data={'query': query}, format="json", **self.header)
+            self.assertHttpStatus(response, status.HTTP_200_OK)
+            data = json.loads(response.content)
+            self.assertNotIn('errors', data)
+            self.assertEqual(len(data['data'][field_name]), self.model.objects.count())
+
+        @override_settings(LOGIN_REQUIRED=True)
+        def test_graphql_filter_objects(self):
+            if not hasattr(self, 'graphql_filter'):
+                return
+
+            url = reverse('graphql')
+            field_name = f'{self._get_graphql_base_name()}_list'
+            query = self._build_filtered_query(field_name, **self.graphql_filter)
 
             # Add object-level permission
             obj_perm = ObjectPermission(
@@ -529,9 +707,9 @@ class APIViewTestCases:
             )
             obj_perm.save()
             obj_perm.users.add(self.user)
-            obj_perm.object_types.add(ContentType.objects.get_for_model(self.model))
+            obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
-            response = self.client.post(url, data={'query': query}, **self.header)
+            response = self.client.post(url, data={'query': query}, format="json", **self.header)
             self.assertHttpStatus(response, status.HTTP_200_OK)
             data = json.loads(response.content)
             self.assertNotIn('errors', data)

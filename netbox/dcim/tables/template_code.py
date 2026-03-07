@@ -10,6 +10,38 @@ LINKTERMINATION = """
 {% endfor %}
 """
 
+INTERFACE_LINKTERMINATION = """
+{% load i18n %}
+{% if record.is_virtual and record.virtual_circuit_termination %}
+  {% for termination in record.connected_endpoints %}
+    <a href="{{ termination.interface.parent_object.get_absolute_url }}">{{ termination.interface.parent_object }}</a>
+    <i class="mdi mdi-chevron-right"></i>
+    <a href="{{ termination.interface.get_absolute_url }}">{{ termination.interface }}</a>
+    {% trans "via" %}
+    <a href="{{ termination.parent_object.get_absolute_url }}">{{ termination.parent_object }}</a>
+    {% if not forloop.last %}<br />{% endif %}
+  {% endfor %}
+{% else %}""" + LINKTERMINATION + """{% endif %}
+"""
+
+INTERFACE_LAG_MEMBERS_LINKTERMINATION = """
+{% for termination in value %}
+  {% if termination.parent_object %}
+    <a href="{{ termination.parent_object.get_absolute_url }}">{{ termination.parent_object }}</a>
+    <i class="mdi mdi-chevron-right"></i>
+  {% endif %}
+  <a href="{{ termination.get_absolute_url }}">{{ termination }}</a>
+  {% if termination.lag %}
+    <i class="mdi mdi-chevron-right"></i>
+    <a href="{{ termination.lag.get_absolute_url }}">{{ termination.lag }}</a>
+    <span class="text-muted">(LAG)</span>
+  {% endif %}
+  {% if not forloop.last %}<br />{% endif %}
+{% empty %}
+  {{ ''|placeholder }}
+{% endfor %}
+"""
+
 CABLE_LENGTH = """
 {% load helpers %}
 {% if record.length %}{{ record.length|floatformat:"-2" }} {{ record.length_unit }}{% endif %}
@@ -21,46 +53,52 @@ WEIGHT = """
 """
 
 DEVICE_LINK = """
-{{ value|default:'<span class="badge bg-info">Unnamed device</span>' }}
+{{ record.label|default:'<span class="badge text-bg-info">Unnamed device</span>' }}
 """
 
 DEVICEBAY_STATUS = """
 {% if record.installed_device_id %}
-    <span class="badge bg-{{ record.installed_device.get_status_color }}">
+    <span class="badge text-bg-{{ record.installed_device.get_status_color }}">
         {{ record.installed_device.get_status_display }}
     </span>
 {% else %}
-    <span class="badge bg-secondary">Vacant</span>
+    <span class="badge text-bg-secondary">Vacant</span>
 {% endif %}
 """
 
 INTERFACE_IPADDRESSES = """
-<div class="table-badge-group">
-  {% for ip in value.all %}
-    {% if ip.status != 'active' %}
-      <a href="{{ ip.get_absolute_url }}" class="table-badge badge bg-{{ ip.get_status_color }}" data-bs-toggle="tooltip" data-bs-placement="left" title="{{ ip.get_status_display }}">{{ ip }}</a>
-    {% else %}
-      <a href="{{ ip.get_absolute_url }}" class="table-badge">{{ ip }}</a>
-    {% endif %}
-  {% endfor %}
-</div>
+  {% if value.count > 3 %}
+    <a href="{% url 'ipam:ipaddress_list' %}?{{ record|meta:"model_name" }}_id={{ record.pk }}">{{ value.count }}</a>
+  {% else %}
+    {% for ip in value.all %}
+      {% if ip.status != 'active' %}
+        <a href="{{ ip.get_absolute_url }}" class="badge text-bg-{{ ip.get_status_color }}" data-bs-toggle="tooltip" data-bs-placement="left" title="{{ ip.get_status_display }}">{{ ip }}</a>
+      {% else %}
+        <a href="{{ ip.get_absolute_url }}">{{ ip }}</a>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
 """
 
 INTERFACE_FHRPGROUPS = """
-<div class="table-badge-group">
   {% for assignment in value.all %}
-    <a href="{{ assignment.group.get_absolute_url }}">{{ assignment.group.get_protocol_display }}: {{ assignment.group.group_id }}</a>
+    <a href="{{ assignment.group.get_absolute_url }}">{{ assignment.group }}</a>
   {% endfor %}
-</div>
 """
 
 INTERFACE_TAGGED_VLANS = """
-{% if record.mode == 'tagged' %}
-    {% for vlan in value.all %}
-        <a href="{{ vlan.get_absolute_url }}">{{ vlan }}</a><br />
-    {% endfor %}
+{% load i18n %}
+{% if record.mode == 'access' %}
 {% elif record.mode == 'tagged-all' %}
-  All
+  {% trans "All" %}
+{% else %}
+  {% if value.count > 3 %}
+    <a href="{% url 'ipam:vlan_list' %}?{{ record|meta:"model_name" }}_id={{ record.pk }}">{{ value.count }} VLANs</a>
+  {% else %}
+    {% for vlan in value.all %}
+      <a href="{{ vlan.get_absolute_url }}">{{ vlan }}</a><br />
+    {% endfor %}
+  {% endif %}
 {% endif %}
 """
 
@@ -87,6 +125,11 @@ LOCATION_BUTTONS = """
 <a href="{% url 'dcim:rack_elevation_list' %}?site={{ record.site.slug }}&location_id={{ record.pk }}" class="btn btn-sm btn-primary" title="View elevations">
     <i class="mdi mdi-server"></i>
 </a>
+"""
+
+OUTER_UNIT = """
+{% load helpers %}
+{% if value %}{{ value }} {{ record.outer_unit }}{% endif %}
 """
 
 #
@@ -139,8 +182,8 @@ CONSOLEPORT_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     <span class="dropdown">
         <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <span class="mdi mdi-ethernet-cable" aria-hidden="true"></span>
@@ -152,7 +195,7 @@ CONSOLEPORT_BUTTONS = """
         </ul>
     </span>
 {% else %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
 {% endif %}
 """
 
@@ -189,8 +232,8 @@ CONSOLESERVERPORT_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     <span class="dropdown">
         <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <span class="mdi mdi-ethernet-cable" aria-hidden="true"></span>
@@ -202,7 +245,7 @@ CONSOLESERVERPORT_BUTTONS = """
         </ul>
     </span>
 {% else %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
 {% endif %}
 """
 
@@ -239,8 +282,8 @@ POWERPORT_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     <span class="dropdown">
         <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
             <span class="mdi mdi-ethernet-cable" aria-hidden="true"></span>
@@ -251,7 +294,7 @@ POWERPORT_BUTTONS = """
         </ul>
     </span>
 {% else %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
 {% endif %}
 """
 
@@ -288,14 +331,14 @@ POWEROUTLET_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     {% if not record.mark_connected %}
         <a href="{% url 'dcim:cable_add' %}?a_terminations_type=dcim.poweroutlet&a_terminations={{ record.pk }}&b_terminations_type=dcim.powerport&termination_b_site={{ object.site.pk }}&termination_b_rack={{ object.rack.pk }}&return_url={% url 'dcim:device_poweroutlets' pk=object.pk %}" title="Connect" class="btn btn-success btn-sm">
             <i class="mdi mdi-ethernet-cable" aria-hidden="true"></i>
         </a>
     {% else %}
-        <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+        <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
     {% endif %}
 {% endif %}
 """
@@ -310,14 +353,17 @@ INTERFACE_BUTTONS = """
       {% if perms.ipam.add_ipaddress %}
         <li><a class="dropdown-item" href="{% url 'ipam:ipaddress_add' %}?interface={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">IP Address</a></li>
       {% endif %}
+      {% if perms.dcim.add_macaddress %}
+        <li><a class="dropdown-item" href="{% url 'dcim:macaddress_add' %}?interface={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">MAC Address</a></li>
+      {% endif %}
       {% if perms.dcim.add_inventoryitem %}
         <li><a class="dropdown-item" href="{% url 'dcim:inventoryitem_add' %}?device={{ record.device_id }}&component_type={{ record|content_type_id }}&component_id={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">Inventory Item</a></li>
       {% endif %}
       {% if perms.dcim.add_interface %}
         <li><a class="dropdown-item" href="{% url 'dcim:interface_add' %}?device={{ record.device_id }}&parent={{ record.pk }}&name={{ record.name }}.&type=virtual&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">Child Interface</a></li>
       {% endif %}
-      {% if perms.ipam.add_l2vpntermination %}
-        <li><a class="dropdown-item" href="{% url 'ipam:l2vpntermination_add' %}?device={{ object.pk }}&interface={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">L2VPN Termination</a></li>
+      {% if perms.vpn.add_l2vpntermination %}
+        <li><a class="dropdown-item" href="{% url 'vpn:l2vpntermination_add' %}?device={{ object.pk }}&interface={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">L2VPN Termination</a></li>
       {% endif %}
       {% if perms.ipam.add_fhrpgroupassignment %}
         <li><a class="dropdown-item" href="{% url 'ipam:fhrpgroupassignment_add' %}?interface_type={{ record|content_type_id }}&interface_id={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}">Assign FHRP Group</a></li>
@@ -359,9 +405,28 @@ INTERFACE_BUTTONS = """
             <i class="mdi mdi-wifi-off" aria-hidden="true"></i>
         </a>
     {% endif %}
+{% elif record.type == 'virtual' %}
+    {% if perms.vpn.add_tunnel and not record.tunnel_termination %}
+        <a href="{% url 'vpn:tunnel_add' %}?termination1_type=dcim.device&termination1_parent={{ record.device.pk }}&termination1_termination={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}" title="Create a tunnel" class="btn btn-success btn-sm">
+            <i class="mdi mdi-tunnel-outline" aria-hidden="true"></i>
+        </a>
+    {% elif perms.vpn.delete_tunneltermination and record.tunnel_termination %}
+        <a href="{% url 'vpn:tunneltermination_delete' pk=record.tunnel_termination.pk %}?return_url={% url 'dcim:device_interfaces' pk=object.pk %}" title="Remove tunnel" class="btn btn-danger btn-sm">
+            <i class="mdi mdi-tunnel-outline" aria-hidden="true"></i>
+        </a>
+    {% endif %}
+    {% if perms.circuits.add_virtualcircuittermination and not record.virtual_circuit_termination %}
+        <a href="{% url 'circuits:virtualcircuittermination_add' %}?interface={{ record.pk }}&return_url={% url 'dcim:device_interfaces' pk=object.pk %}" title="Terminate a virtual circuit" class="btn btn-success btn-sm">
+            <i class="mdi mdi-vector-line" aria-hidden="true"></i>
+        </a>
+    {% elif perms.circuits.delete_virtualcircuittermination and record.virtual_circuit_termination %}
+        <a href="{% url 'circuits:virtualcircuittermination_delete' pk=record.virtual_circuit_termination.pk %}?return_url={% url 'dcim:device_interfaces' pk=object.pk %}" title="Remove virtual circuit" class="btn btn-danger btn-sm">
+            <i class="mdi mdi-vector-line" aria-hidden="true"></i>
+        </a>
+    {% endif %}
 {% elif record.is_wired and perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     {% if not record.mark_connected %}
     <span class="dropdown">
         <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false" title="Connect cable">
@@ -375,7 +440,7 @@ INTERFACE_BUTTONS = """
         </ul>
     </span>
     {% else %}
-        <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+        <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
     {% endif %}
 {% elif record.is_wireless and perms.wireless.add_wirelesslink %}
     <a href="{% url 'wireless:wirelesslink_add' %}?site_a={{ record.device.site.pk }}&location_a={{ record.device.location.pk }}&device_a={{ record.device_id }}&interface_a={{ record.pk }}&site_b={{ record.device.site.pk }}&location_b={{ record.device.location.pk }}" class="btn btn-success btn-sm">
@@ -417,8 +482,8 @@ FRONTPORT_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     {% if not record.mark_connected %}
         <span class="dropdown">
             <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -434,7 +499,7 @@ FRONTPORT_BUTTONS = """
             </ul>
         </span>
     {% else %}
-        <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+        <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
     {% endif %}
 {% endif %}
 """
@@ -472,8 +537,8 @@ REARPORT_BUTTONS = """
         </span>
     {% endif %}
 {% elif perms.dcim.add_cable %}
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
-    <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-transit-connection-variant" aria-hidden="true"></i></a>
+    <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-lan-connect" aria-hidden="true"></i></a>
     {% if not record.mark_connected %}
         <span class="dropdown">
             <button type="button" class="btn btn-success btn-sm dropdown-toggle" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
@@ -489,7 +554,7 @@ REARPORT_BUTTONS = """
             </ul>
         </span>
     {% else %}
-        <a href="#" class="btn btn-outline-dark btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
+        <a href="#" class="btn btn-outline-secondary btn-sm disabled"><i class="mdi mdi-ethernet-cable" aria-hidden="true"></i></a>
     {% endif %}
 {% endif %}
 """
@@ -520,4 +585,8 @@ MODULEBAY_BUTTONS = """
         </a>
     {% endif %}
 {% endif %}
+"""
+
+MODULETYPEPROFILE_ATTRIBUTES = """
+{% if value %}{% for attr in value %}{{ attr }}{% if not forloop.last %}, {% endif %}{% endfor %}{% endif %}
 """

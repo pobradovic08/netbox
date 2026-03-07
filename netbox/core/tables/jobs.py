@@ -1,8 +1,10 @@
 import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
 
-from netbox.tables import NetBoxTable, columns
-from ..models import Job
+from core.constants import JOB_LOG_ENTRY_LEVELS
+from core.models import Job
+from core.tables.columns import BadgeColumn
+from netbox.tables import BaseTable, NetBoxTable, columns
 
 
 class JobTable(NetBoxTable):
@@ -19,7 +21,8 @@ class JobTable(NetBoxTable):
     )
     object = tables.Column(
         verbose_name=_('Object'),
-        linkify=True
+        linkify=True,
+        orderable=False
     )
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
@@ -39,6 +42,12 @@ class JobTable(NetBoxTable):
     completed = columns.DateTimeColumn(
         verbose_name=_('Completed'),
     )
+    queue_name = tables.Column(
+        verbose_name=_('Queue'),
+    )
+    log_entries = tables.Column(
+        verbose_name=_('Log Entries'),
+    )
     actions = columns.ActionsColumn(
         actions=('delete',)
     )
@@ -47,8 +56,29 @@ class JobTable(NetBoxTable):
         model = Job
         fields = (
             'pk', 'id', 'object_type', 'object', 'name', 'status', 'created', 'scheduled', 'interval', 'started',
-            'completed', 'user', 'job_id',
+            'completed', 'user', 'queue_name', 'log_entries', 'error', 'job_id',
         )
         default_columns = (
             'pk', 'id', 'object_type', 'object', 'name', 'status', 'created', 'started', 'completed', 'user',
         )
+
+    def render_log_entries(self, value):
+        return len(value)
+
+
+class JobLogEntryTable(BaseTable):
+    timestamp = columns.DateTimeColumn(
+        timespec='milliseconds',
+        verbose_name=_('Time'),
+    )
+    level = BadgeColumn(
+        badges=JOB_LOG_ENTRY_LEVELS,
+        verbose_name=_('Level'),
+    )
+    message = tables.Column(
+        verbose_name=_('Message'),
+    )
+
+    class Meta(BaseTable.Meta):
+        empty_text = _('No log entries')
+        fields = ('timestamp', 'level', 'message')

@@ -1,13 +1,14 @@
 import decimal
-import yaml
-
 from functools import cached_property
 
+import yaml
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.core.files.storage import default_storage
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.db.models import F, ProtectedError
+from django.db.models import F, ProtectedError, prefetch_related_objects
 from django.db.models.functions import Lower
 from django.db.models.signals import post_save
 from django.urls import reverse
@@ -16,25 +17,29 @@ from django.utils.translation import gettext_lazy as _
 
 from dcim.choices import *
 from dcim.constants import *
-from extras.models import ConfigContextModel
+from dcim.fields import MACAddressField
+from dcim.utils import create_port_mappings, update_interface_bridges
+from extras.models import ConfigContextModel, CustomField
 from extras.querysets import ConfigContextModelQuerySet
+from netbox.choices import ColorChoices
 from netbox.config import ConfigItem
-from netbox.models import OrganizationalModel, PrimaryModel
+from netbox.models import NestedGroupModel, OrganizationalModel, PrimaryModel
 from netbox.models.features import ContactsMixin, ImageAttachmentsMixin
-from utilities.choices import ColorChoices
-from utilities.fields import ColorField, CounterCacheField, NaturalOrderingField
+from netbox.models.mixins import WeightMixin
+from utilities.fields import ColorField, CounterCacheField
+from utilities.prefetch import get_prefetchable_fields
 from utilities.tracking import TrackingModelMixin
-from .device_components import *
-from .mixins import RenderConfigMixin, WeightMixin
 
+from .device_components import *
+from .mixins import RenderConfigMixin
+from .modules import Module
 
 __all__ = (
     'Device',
     'DeviceRole',
     'DeviceType',
+    'MACAddress',
     'Manufacturer',
-    'Module',
-    'ModuleType',
     'Platform',
     'VirtualChassis',
     'VirtualDeviceContext',
@@ -53,9 +58,6 @@ class Manufacturer(ContactsMixin, OrganizationalModel):
         ordering = ('name',)
         verbose_name = _('manufacturer')
         verbose_name_plural = _('manufacturers')
-
-    def get_absolute_url(self):
-        return reverse('dcim:manufacturer', args=[self.pk])
 
 
 class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
@@ -106,15 +108,21 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         default=1.0,
         verbose_name=_('height (U)')
     )
+    exclude_from_utilization = models.BooleanField(
+        default=False,
+        verbose_name=_('exclude from utilization'),
+        help_text=_('Devices of this type are excluded when calculating rack utilization.')
+    )
     is_full_depth = models.BooleanField(
         default=True,
         verbose_name=_('is full depth'),
-        help_text=_('Device consumes both front and rear rack faces')
+        help_text=_('Device consumes both front and rear rack faces.')
     )
     subdevice_role = models.CharField(
         max_length=50,
         choices=SubdeviceRoleChoices,
         blank=True,
+        null=True,
         verbose_name=_('parent/child status'),
         help_text=_('Parent devices house child devices in device bays. Leave blank '
                     'if this device type is neither a parent nor a child.')
@@ -123,7 +131,8 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         verbose_name=_('airflow'),
         max_length=50,
         choices=DeviceAirflowChoices,
-        blank=True
+        blank=True,
+        null=True
     )
     front_image = models.ImageField(
         upload_to='devicetype-images',
@@ -175,6 +184,10 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         to_model='dcim.InventoryItemTemplate',
         to_field='device_type'
     )
+    device_count = CounterCacheField(
+        to_model='dcim.Device',
+        to_field='device_type'
+    )
 
     clone_fields = (
         'manufacturer', 'default_platform', 'u_height', 'is_full_depth', 'subdevice_role', 'airflow', 'weight',
@@ -212,27 +225,25 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         self._original_front_image = self.__dict__.get('front_image')
         self._original_rear_image = self.__dict__.get('rear_image')
 
-    def get_absolute_url(self):
-        return reverse('dcim:devicetype', args=[self.pk])
-
     @property
-    def get_full_name(self):
-        return f"{ self.manufacturer } { self.model }"
+    def full_name(self):
+        return f"{self.manufacturer} {self.model}"
 
     def to_yaml(self):
         data = {
             'manufacturer': self.manufacturer.name,
             'model': self.model,
             'slug': self.slug,
+            'description': self.description,
             'default_platform': self.default_platform.name if self.default_platform else None,
             'part_number': self.part_number,
             'u_height': float(self.u_height),
             'is_full_depth': self.is_full_depth,
             'subdevice_role': self.subdevice_role,
             'airflow': self.airflow,
-            'comments': self.comments,
             'weight': float(self.weight) if self.weight is not None else None,
             'weight_unit': self.weight_unit,
+            'comments': self.comments,
         }
 
         # Component templates
@@ -287,7 +298,7 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         # If editing an existing DeviceType to have a larger u_height, first validate that *all* instances of it have
         # room to expand within their racks. This validation will impose a very high performance penalty when there are
         # many instances to check, but increasing the u_height of a DeviceType should be a very rare occurrence.
-        if self.pk and self.u_height > self._original_u_height:
+        if not self._state.adding and self.u_height > self._original_u_height:
             for d in Device.objects.filter(device_type=self, position__isnull=False):
                 face_required = None if self.is_full_depth else d.face
                 u_available = d.rack.get_available_units(
@@ -297,12 +308,14 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
                 )
                 if d.position not in u_available:
                     raise ValidationError({
-                        'u_height': _("Device {} in rack {} does not have sufficient space to accommodate a height of "
-                                      "{}U").format(d, d.rack, self.u_height)
+                        'u_height': _(
+                            "Device {device} in rack {rack} does not have sufficient space to accommodate a "
+                            "height of {height}U"
+                        ).format(device=d, rack=d.rack, height=self.u_height)
                     })
 
         # If modifying the height of an existing DeviceType to 0U, check for any instances assigned to a rack position.
-        elif self.pk and self._original_u_height > 0 and self.u_height == 0:
+        elif not self._state.adding and self._original_u_height > 0 and self.u_height == 0:
             racked_instance_count = Device.objects.filter(
                 device_type=self,
                 position__isnull=False
@@ -358,99 +371,11 @@ class DeviceType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
         return self.subdevice_role == SubdeviceRoleChoices.ROLE_CHILD
 
 
-class ModuleType(ImageAttachmentsMixin, PrimaryModel, WeightMixin):
-    """
-    A ModuleType represents a hardware element that can be installed within a device and which houses additional
-    components; for example, a line card within a chassis-based switch such as the Cisco Catalyst 6500. Like a
-    DeviceType, each ModuleType can have console, power, interface, and pass-through port templates assigned to it. It
-    cannot, however house device bays or module bays.
-    """
-    manufacturer = models.ForeignKey(
-        to='dcim.Manufacturer',
-        on_delete=models.PROTECT,
-        related_name='module_types'
-    )
-    model = models.CharField(
-        verbose_name=_('model'),
-        max_length=100
-    )
-    part_number = models.CharField(
-        verbose_name=_('part number'),
-        max_length=50,
-        blank=True,
-        help_text=_('Discrete part number (optional)')
-    )
-
-    clone_fields = ('manufacturer', 'weight', 'weight_unit',)
-    prerequisite_models = (
-        'dcim.Manufacturer',
-    )
-
-    class Meta:
-        ordering = ('manufacturer', 'model')
-        constraints = (
-            models.UniqueConstraint(
-                fields=('manufacturer', 'model'),
-                name='%(app_label)s_%(class)s_unique_manufacturer_model'
-            ),
-        )
-        verbose_name = _('module type')
-        verbose_name_plural = _('module types')
-
-    def __str__(self):
-        return self.model
-
-    def get_absolute_url(self):
-        return reverse('dcim:moduletype', args=[self.pk])
-
-    def to_yaml(self):
-        data = {
-            'manufacturer': self.manufacturer.name,
-            'model': self.model,
-            'part_number': self.part_number,
-            'comments': self.comments,
-            'weight': float(self.weight) if self.weight is not None else None,
-            'weight_unit': self.weight_unit,
-        }
-
-        # Component templates
-        if self.consoleporttemplates.exists():
-            data['console-ports'] = [
-                c.to_yaml() for c in self.consoleporttemplates.all()
-            ]
-        if self.consoleserverporttemplates.exists():
-            data['console-server-ports'] = [
-                c.to_yaml() for c in self.consoleserverporttemplates.all()
-            ]
-        if self.powerporttemplates.exists():
-            data['power-ports'] = [
-                c.to_yaml() for c in self.powerporttemplates.all()
-            ]
-        if self.poweroutlettemplates.exists():
-            data['power-outlets'] = [
-                c.to_yaml() for c in self.poweroutlettemplates.all()
-            ]
-        if self.interfacetemplates.exists():
-            data['interfaces'] = [
-                c.to_yaml() for c in self.interfacetemplates.all()
-            ]
-        if self.frontporttemplates.exists():
-            data['front-ports'] = [
-                c.to_yaml() for c in self.frontporttemplates.all()
-            ]
-        if self.rearporttemplates.exists():
-            data['rear-ports'] = [
-                c.to_yaml() for c in self.rearporttemplates.all()
-            ]
-
-        return yaml.dump(dict(data), sort_keys=False)
-
-
 #
 # Devices
 #
 
-class DeviceRole(OrganizationalModel):
+class DeviceRole(NestedGroupModel):
     """
     Devices are organized by functional role; for example, "Core Switch" or "File Server". Each DeviceRole is assigned a
     color to be used when displaying rack elevations. The vm_role field determines whether the role is applicable to
@@ -473,16 +398,40 @@ class DeviceRole(OrganizationalModel):
         null=True
     )
 
+    clone_fields = ('parent', 'description')
+
     class Meta:
         ordering = ('name',)
+        # Empty tuple triggers Django migration detection for MPTT indexes
+        # (see #21016, django-mptt/django-mptt#682)
+        indexes = ()
+        constraints = (
+            models.UniqueConstraint(
+                fields=('parent', 'name'),
+                name='%(app_label)s_%(class)s_parent_name'
+            ),
+            models.UniqueConstraint(
+                fields=('name',),
+                name='%(app_label)s_%(class)s_name',
+                condition=Q(parent__isnull=True),
+                violation_error_message=_("A top-level device role with this name already exists.")
+            ),
+            models.UniqueConstraint(
+                fields=('parent', 'slug'),
+                name='%(app_label)s_%(class)s_parent_slug'
+            ),
+            models.UniqueConstraint(
+                fields=('slug',),
+                name='%(app_label)s_%(class)s_slug',
+                condition=Q(parent__isnull=True),
+                violation_error_message=_("A top-level device role with this slug already exists.")
+            ),
+        )
         verbose_name = _('device role')
         verbose_name_plural = _('device roles')
 
-    def get_absolute_url(self):
-        return reverse('dcim:devicerole', args=[self.pk])
 
-
-class Platform(OrganizationalModel):
+class Platform(NestedGroupModel):
     """
     Platform refers to the software or firmware running on a Device. For example, "Cisco IOS-XR" or "Juniper Junos". A
     Platform may optionally be associated with a particular Manufacturer.
@@ -503,27 +452,37 @@ class Platform(OrganizationalModel):
         null=True
     )
 
+    clone_fields = ('parent', 'description')
+
     class Meta:
         ordering = ('name',)
+        # Empty tuple triggers Django migration detection for MPTT indexes
+        # (see #21016, django-mptt/django-mptt#682)
+        indexes = ()
         verbose_name = _('platform')
         verbose_name_plural = _('platforms')
-
-    def get_absolute_url(self):
-        return reverse('dcim:platform', args=[self.pk])
-
-
-def update_interface_bridges(device, interface_templates, module=None):
-    """
-    Used for device and module instantiation. Iterates all InterfaceTemplates with a bridge assigned
-    and applies it to the actual interfaces.
-    """
-    for interface_template in interface_templates.exclude(bridge=None):
-        interface = Interface.objects.get(device=device, name=interface_template.resolve_name(module=module))
-
-        if interface_template.bridge:
-            interface.bridge = Interface.objects.get(device=device, name=interface_template.bridge.resolve_name(module=module))
-            interface.full_clean()
-            interface.save()
+        constraints = (
+            models.UniqueConstraint(
+                fields=('manufacturer', 'name'),
+                name='%(app_label)s_%(class)s_manufacturer_name',
+            ),
+            models.UniqueConstraint(
+                fields=('name',),
+                name='%(app_label)s_%(class)s_name',
+                condition=Q(manufacturer__isnull=True),
+                violation_error_message=_("Platform name must be unique.")
+            ),
+            models.UniqueConstraint(
+                fields=('manufacturer', 'slug'),
+                name='%(app_label)s_%(class)s_manufacturer_slug',
+            ),
+            models.UniqueConstraint(
+                fields=('slug',),
+                name='%(app_label)s_%(class)s_slug',
+                condition=Q(manufacturer__isnull=True),
+                violation_error_message=_("Platform slug must be unique.")
+            ),
+        )
 
 
 class Device(
@@ -574,13 +533,8 @@ class Device(
         verbose_name=_('name'),
         max_length=64,
         blank=True,
-        null=True
-    )
-    _name = NaturalOrderingField(
-        target_field='name',
-        max_length=100,
-        blank=True,
-        null=True
+        null=True,
+        db_collation="natural_sort"
     )
     serial = models.CharField(
         max_length=50,
@@ -627,6 +581,7 @@ class Device(
     face = models.CharField(
         max_length=50,
         blank=True,
+        null=True,
         choices=DeviceFaceChoices,
         verbose_name=_('rack face')
     )
@@ -640,7 +595,8 @@ class Device(
         verbose_name=_('airflow'),
         max_length=50,
         choices=DeviceAirflowChoices,
-        blank=True
+        blank=True,
+        null=True
     )
     primary_ip4 = models.OneToOneField(
         to='ipam.IPAddress',
@@ -680,11 +636,10 @@ class Device(
         blank=True,
         null=True
     )
-    vc_position = models.PositiveSmallIntegerField(
+    vc_position = models.PositiveIntegerField(
         verbose_name=_('VC position'),
         blank=True,
         null=True,
-        validators=[MaxValueValidator(255)],
         help_text=_('Virtual chassis position')
     )
     vc_priority = models.PositiveSmallIntegerField(
@@ -700,6 +655,10 @@ class Device(
         decimal_places=6,
         blank=True,
         null=True,
+        validators=[
+            MinValueValidator(decimal.Decimal('-90.0')),
+            MaxValueValidator(decimal.Decimal('90.0'))
+        ],
         help_text=_("GPS coordinate in decimal format (xx.yyyyyy)")
     )
     longitude = models.DecimalField(
@@ -708,7 +667,17 @@ class Device(
         decimal_places=6,
         blank=True,
         null=True,
+        validators=[
+            MinValueValidator(decimal.Decimal('-180.0')),
+            MaxValueValidator(decimal.Decimal('180.0'))
+        ],
         help_text=_("GPS coordinate in decimal format (xx.yyyyyy)")
+    )
+    services = GenericRelation(
+        to='ipam.Service',
+        content_type_field='parent_object_type',
+        object_id_field='parent_object_id',
+        related_query_name='device',
     )
 
     # Counter fields
@@ -766,7 +735,7 @@ class Device(
     )
 
     class Meta:
-        ordering = ('_name', 'pk')  # Name may be null
+        ordering = ('name', 'pk')  # Name may be null
         constraints = (
             models.UniqueConstraint(
                 Lower('name'), 'site', 'tenant',
@@ -791,36 +760,15 @@ class Device(
         verbose_name_plural = _('devices')
 
     def __str__(self):
-        if self.name and self.asset_tag:
-            return f'{self.name} ({self.asset_tag})'
-        elif self.name:
-            return self.name
-        elif self.virtual_chassis and self.asset_tag:
-            return f'{self.virtual_chassis.name}:{self.vc_position} ({self.asset_tag})'
-        elif self.virtual_chassis:
-            return f'{self.virtual_chassis.name}:{self.vc_position} ({self.pk})'
-        elif self.device_type and self.asset_tag:
+        if self.label and self.asset_tag:
+            return f'{self.label} ({self.asset_tag})'
+        if self.label:
+            return self.label
+        if self.device_type and self.asset_tag:
             return f'{self.device_type.manufacturer} {self.device_type.model} ({self.asset_tag})'
-        elif self.device_type:
+        if self.device_type:
             return f'{self.device_type.manufacturer} {self.device_type.model} ({self.pk})'
         return super().__str__()
-
-    def get_absolute_url(self):
-        return reverse('dcim:device', args=[self.pk])
-
-    @property
-    def device_role(self):
-        """
-        For backwards compatibility with pre-v3.6 code expecting a device_role to be present on Device.
-        """
-        return self.role
-
-    @device_role.setter
-    def device_role(self, value):
-        """
-        For backwards compatibility with pre-v3.6 code expecting a device_role to be present on Device.
-        """
-        self.role = value
 
     def clean(self):
         super().clean()
@@ -868,7 +816,7 @@ class Device(
             if self.position and self.device_type.u_height == 0:
                 raise ValidationError({
                     'position': _(
-                        "A U0 device type ({device_type}) cannot be assigned to a rack position."
+                        "A 0U device type ({device_type}) cannot be assigned to a rack position."
                     ).format(device_type=self.device_type)
                 })
 
@@ -915,32 +863,38 @@ class Device(
         if self.primary_ip4:
             if self.primary_ip4.family != 4:
                 raise ValidationError({
-                    'primary_ip4': _("{primary_ip4} is not an IPv4 address.").format(primary_ip4=self.primary_ip4)
+                    'primary_ip4': _("{ip} is not an IPv4 address.").format(ip=self.primary_ip4)
                 })
             if self.primary_ip4.assigned_object in vc_interfaces:
                 pass
-            elif self.primary_ip4.nat_inside is not None and self.primary_ip4.nat_inside.assigned_object in vc_interfaces:
+            elif (
+                    self.primary_ip4.nat_inside is not None and
+                    self.primary_ip4.nat_inside.assigned_object in vc_interfaces
+            ):
                 pass
             else:
                 raise ValidationError({
                     'primary_ip4': _(
-                        "The specified IP address ({primary_ip4}) is not assigned to this device."
-                    ).format(primary_ip4=self.primary_ip4)
+                        "The specified IP address ({ip}) is not assigned to this device."
+                    ).format(ip=self.primary_ip4)
                 })
         if self.primary_ip6:
             if self.primary_ip6.family != 6:
                 raise ValidationError({
-                    'primary_ip6': _("{primary_ip6} is not an IPv6 address.").format(primary_ip6=self.primary_ip6m)
+                    'primary_ip6': _("{ip} is not an IPv6 address.").format(ip=self.primary_ip6)
                 })
             if self.primary_ip6.assigned_object in vc_interfaces:
                 pass
-            elif self.primary_ip6.nat_inside is not None and self.primary_ip6.nat_inside.assigned_object in vc_interfaces:
+            elif (
+                    self.primary_ip6.nat_inside is not None and
+                    self.primary_ip6.nat_inside.assigned_object in vc_interfaces
+            ):
                 pass
             else:
                 raise ValidationError({
                     'primary_ip6': _(
-                        "The specified IP address ({primary_ip6}) is not assigned to this device."
-                    ).format(primary_ip6=self.primary_ip6)
+                        "The specified IP address ({ip}) is not assigned to this device."
+                    ).format(ip=self.primary_ip6)
                 })
         if self.oob_ip:
             if self.oob_ip.assigned_object in vc_interfaces:
@@ -958,23 +912,40 @@ class Device(
                 raise ValidationError({
                     'platform': _(
                         "The assigned platform is limited to {platform_manufacturer} device types, but this device's "
-                        "type belongs to {device_type_manufacturer}."
+                        "type belongs to {devicetype_manufacturer}."
                     ).format(
                         platform_manufacturer=self.platform.manufacturer,
-                        device_type_manufacturer=self.device_type.manufacturer
+                        devicetype_manufacturer=self.device_type.manufacturer
                     )
                 })
 
         # A Device can only be assigned to a Cluster in the same Site (or no Site)
-        if self.cluster and self.cluster.site is not None and self.cluster.site != self.site:
+        if self.cluster and self.cluster._site is not None and self.cluster._site != self.site:
             raise ValidationError({
-                'cluster': _("The assigned cluster belongs to a different site ({})").format(self.cluster.site)
+                'cluster': _("The assigned cluster belongs to a different site ({site})").format(
+                    site=self.cluster._site
+                )
+            })
+
+        if self.cluster and self.cluster._location is not None and self.cluster._location != self.location:
+            raise ValidationError({
+                'cluster': _("The assigned cluster belongs to a different location ({location})").format(
+                    site=self.cluster._location
+                )
             })
 
         # Validate virtual chassis assignment
         if self.virtual_chassis and self.vc_position is None:
             raise ValidationError({
                 'vc_position': _("A device assigned to a virtual chassis must have its position defined.")
+            })
+
+        if hasattr(self, 'vc_master_for') and self.vc_master_for and self.vc_master_for != self.virtual_chassis:
+            raise ValidationError({
+                'virtual_chassis': _(
+                    'Device cannot be removed from virtual chassis {virtual_chassis} because it is currently '
+                    'designated as its master.'
+                ).format(virtual_chassis=self.vc_master_for)
             })
 
     def _instantiate_components(self, queryset, bulk_create=True):
@@ -985,12 +956,25 @@ class Device(
             bulk_create: If True, bulk_create() will be called to create all components in a single query
                          (default). Otherwise, save() will be called on each instance individually.
         """
+        model = queryset.model.component_model
+
         if bulk_create:
             components = [obj.instantiate(device=self) for obj in queryset]
             if not components:
                 return
-            model = components[0]._meta.model
-            model.objects.bulk_create(components)
+            # Set default values for any applicable custom fields
+            if cf_defaults := CustomField.objects.get_defaults_for_model(model):
+                for component in components:
+                    component.custom_field_data = cf_defaults
+            # Set denormalized references
+            for component in components:
+                component._site = self.site
+                component._location = self.location
+                component._rack = self.rack
+            components = model.objects.bulk_create(components)
+            # Prefetch related objects to minimize queries needed during post_save
+            prefetch_fields = get_prefetchable_fields(model)
+            prefetch_related_objects(components, *prefetch_fields)
             # Manually send the post_save signal for each of the newly created components
             for component in components:
                 post_save.send(
@@ -1004,6 +988,9 @@ class Device(
         else:
             for obj in queryset:
                 component = obj.instantiate(device=self)
+                # Set default values for any applicable custom fields
+                if cf_defaults := CustomField.objects.get_defaults_for_model(model):
+                    component.custom_field_data = cf_defaults
                 component.save()
 
     def save(self, *args, **kwargs):
@@ -1032,7 +1019,10 @@ class Device(
             self._instantiate_components(self.device_type.interfacetemplates.all())
             self._instantiate_components(self.device_type.rearporttemplates.all())
             self._instantiate_components(self.device_type.frontporttemplates.all())
-            self._instantiate_components(self.device_type.modulebaytemplates.all())
+            # Replicate any front/rear port mappings from the DeviceType
+            create_port_mappings(self, self.device_type)
+            # Disable bulk_create to accommodate MPTT
+            self._instantiate_components(self.device_type.modulebaytemplates.all(), bulk_create=False)
             self._instantiate_components(self.device_type.devicebaytemplates.all())
             # Disable bulk_create to accommodate MPTT
             self._instantiate_components(self.device_type.inventoryitemtemplates.all(), bulk_create=False)
@@ -1048,24 +1038,32 @@ class Device(
             device.save()
 
     @property
+    def label(self):
+        """
+        Return the device name if set; otherwise return a generated name if available.
+        """
+        if self.name:
+            return self.name
+        if self.virtual_chassis:
+            return f'{self.virtual_chassis.name}:{self.vc_position}'
+        return None
+
+    @property
     def identifier(self):
         """
         Return the device name if set; otherwise return the Device's primary key as {pk}
         """
-        if self.name is not None:
-            return self.name
-        return '{{{}}}'.format(self.pk)
+        return self.label or '{{{}}}'.format(self.pk)
 
     @property
     def primary_ip(self):
         if ConfigItem('PREFER_IPV4')() and self.primary_ip4:
             return self.primary_ip4
-        elif self.primary_ip6:
+        if self.primary_ip6:
             return self.primary_ip6
-        elif self.primary_ip4:
+        if self.primary_ip4:
             return self.primary_ip4
-        else:
-            return None
+        return None
 
     @property
     def interfaces_count(self):
@@ -1084,7 +1082,7 @@ class Device(
 
         :param if_master: If True, return VC member interfaces only if this Device is the VC master.
         """
-        filter = Q(device=self)
+        filter = Q(device=self) if self.pk else Q()
         if self.virtual_chassis and (self.virtual_chassis.master == self or not if_master):
             filter |= Q(device__virtual_chassis=self.virtual_chassis, mgmt_only=False)
         return Interface.objects.filter(filter)
@@ -1127,151 +1125,6 @@ class Device(
         return round(total_weight / 1000, 2)
 
 
-class Module(PrimaryModel, ConfigContextModel):
-    """
-    A Module represents a field-installable component within a Device which may itself hold multiple device components
-    (for example, a line card within a chassis switch). Modules are instantiated from ModuleTypes.
-    """
-    device = models.ForeignKey(
-        to='dcim.Device',
-        on_delete=models.CASCADE,
-        related_name='modules'
-    )
-    module_bay = models.OneToOneField(
-        to='dcim.ModuleBay',
-        on_delete=models.CASCADE,
-        related_name='installed_module'
-    )
-    module_type = models.ForeignKey(
-        to='dcim.ModuleType',
-        on_delete=models.PROTECT,
-        related_name='instances'
-    )
-    status = models.CharField(
-        verbose_name=_('status'),
-        max_length=50,
-        choices=ModuleStatusChoices,
-        default=ModuleStatusChoices.STATUS_ACTIVE
-    )
-    serial = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name=_('serial number')
-    )
-    asset_tag = models.CharField(
-        max_length=50,
-        blank=True,
-        null=True,
-        unique=True,
-        verbose_name=_('asset tag'),
-        help_text=_('A unique tag used to identify this device')
-    )
-
-    clone_fields = ('device', 'module_type', 'status')
-
-    class Meta:
-        ordering = ('module_bay',)
-        verbose_name = _('module')
-        verbose_name_plural = _('modules')
-
-    def __str__(self):
-        return f'{self.module_bay.name}: {self.module_type} ({self.pk})'
-
-    def get_absolute_url(self):
-        return reverse('dcim:module', args=[self.pk])
-
-    def get_status_color(self):
-        return ModuleStatusChoices.colors.get(self.status)
-
-    def clean(self):
-        super().clean()
-
-        if hasattr(self, "module_bay") and (self.module_bay.device != self.device):
-            raise ValidationError(
-                _("Module must be installed within a module bay belonging to the assigned device ({device}).").format(
-                    device=self.device
-                )
-            )
-
-    def save(self, *args, **kwargs):
-        is_new = self.pk is None
-
-        super().save(*args, **kwargs)
-
-        adopt_components = getattr(self, '_adopt_components', False)
-        disable_replication = getattr(self, '_disable_replication', False)
-
-        # We skip adding components if the module is being edited or
-        # both replication and component adoption is disabled
-        if not is_new or (disable_replication and not adopt_components):
-            return
-
-        # Iterate all component types
-        for templates, component_attribute, component_model in [
-            ("consoleporttemplates", "consoleports", ConsolePort),
-            ("consoleserverporttemplates", "consoleserverports", ConsoleServerPort),
-            ("interfacetemplates", "interfaces", Interface),
-            ("powerporttemplates", "powerports", PowerPort),
-            ("poweroutlettemplates", "poweroutlets", PowerOutlet),
-            ("rearporttemplates", "rearports", RearPort),
-            ("frontporttemplates", "frontports", FrontPort)
-        ]:
-            create_instances = []
-            update_instances = []
-
-            # Prefetch installed components
-            installed_components = {
-                component.name: component
-                for component in getattr(self.device, component_attribute).filter(module__isnull=True)
-            }
-
-            # Get the template for the module type.
-            for template in getattr(self.module_type, templates).all():
-                template_instance = template.instantiate(device=self.device, module=self)
-
-                if adopt_components:
-                    existing_item = installed_components.get(template_instance.name)
-
-                    # Check if there's a component with the same name already
-                    if existing_item:
-                        # Assign it to the module
-                        existing_item.module = self
-                        update_instances.append(existing_item)
-                        continue
-
-                # Only create new components if replication is enabled
-                if not disable_replication:
-                    create_instances.append(template_instance)
-
-            component_model.objects.bulk_create(create_instances)
-            # Emit the post_save signal for each newly created object
-            for component in create_instances:
-                post_save.send(
-                    sender=component_model,
-                    instance=component,
-                    created=True,
-                    raw=False,
-                    using='default',
-                    update_fields=None
-                )
-
-            update_fields = ['module']
-            component_model.objects.bulk_update(update_instances, update_fields)
-            # Emit the post_save signal for each updated object
-            for component in update_instances:
-                post_save.send(
-                    sender=component_model,
-                    instance=component,
-                    created=False,
-                    raw=False,
-                    using='default',
-                    update_fields=update_fields
-                )
-
-        # Interface bridges have to be set after interface instantiation
-        update_interface_bridges(self.device, self.module_type.interfacetemplates, self)
-
-
 #
 # Virtual chassis
 #
@@ -1289,7 +1142,8 @@ class VirtualChassis(PrimaryModel):
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=64
+        max_length=64,
+        db_collation="natural_sort"
     )
     domain = models.CharField(
         verbose_name=_('domain'),
@@ -1311,15 +1165,12 @@ class VirtualChassis(PrimaryModel):
     def __str__(self):
         return self.name
 
-    def get_absolute_url(self):
-        return reverse('dcim:virtualchassis', kwargs={'pk': self.pk})
-
     def clean(self):
         super().clean()
 
         # Verify that the selected master device has been assigned to this VirtualChassis. (Skip when creating a new
         # VirtualChassis.)
-        if self.pk and self.master and self.master not in self.members.all():
+        if not self._state.adding and self.master and self.master not in self.members.all():
             raise ValidationError({
                 'master': _("The selected master ({master}) is not assigned to this virtual chassis.").format(
                     master=self.master
@@ -1327,7 +1178,6 @@ class VirtualChassis(PrimaryModel):
             })
 
     def delete(self, *args, **kwargs):
-
         # Check for LAG interfaces split across member chassis
         interfaces = Interface.objects.filter(
             device__in=self.members.all(),
@@ -1340,6 +1190,13 @@ class VirtualChassis(PrimaryModel):
                 "Unable to delete virtual chassis {self}. There are member interfaces which form a cross-chassis LAG "
                 "interfaces."
             ).format(self=self, interfaces=InterfaceSpeedChoices))
+
+        # Clear vc_position and vc_priority on member devices BEFORE calling super().delete()
+        # This must be done here because on_delete=SET_NULL executes before pre_delete signal
+        for device in self.members.all():
+            device.vc_position = None
+            device.vc_priority = None
+            device.save()
 
         return super().delete(*args, **kwargs)
 
@@ -1354,7 +1211,8 @@ class VirtualDeviceContext(PrimaryModel):
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=64
+        max_length=64,
+        db_collation="natural_sort"
     )
     status = models.CharField(
         verbose_name=_('status'),
@@ -1413,9 +1271,6 @@ class VirtualDeviceContext(PrimaryModel):
     def __str__(self):
         return self.name
 
-    def get_absolute_url(self):
-        return reverse('dcim:virtualdevicecontext', kwargs={'pk': self.pk})
-
     def get_status_color(self):
         return VirtualDeviceContextStatusChoices.colors.get(self.status)
 
@@ -1423,12 +1278,11 @@ class VirtualDeviceContext(PrimaryModel):
     def primary_ip(self):
         if ConfigItem('PREFER_IPV4')() and self.primary_ip4:
             return self.primary_ip4
-        elif self.primary_ip6:
+        if self.primary_ip6:
             return self.primary_ip6
-        elif self.primary_ip4:
+        if self.primary_ip4:
             return self.primary_ip4
-        else:
-            return None
+        return None
 
     def clean(self):
         super().clean()
@@ -1440,11 +1294,81 @@ class VirtualDeviceContext(PrimaryModel):
             if primary_ip.family != family:
                 raise ValidationError({
                     f'primary_ip{family}': _(
-                        "{primary_ip} is not an IPv{family} address."
-                    ).format(family=family, primary_ip=primary_ip)
+                        "{ip} is not an IPv{family} address."
+                    ).format(family=family, ip=primary_ip)
                 })
             device_interfaces = self.device.vc_interfaces(if_master=False)
             if primary_ip.assigned_object not in device_interfaces:
                 raise ValidationError({
                     f'primary_ip{family}': _('Primary IP address must belong to an interface on the assigned device.')
                 })
+
+
+#
+# Addressing
+#
+
+class MACAddress(PrimaryModel):
+    mac_address = MACAddressField(
+        verbose_name=_('MAC address')
+    )
+    assigned_object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
+        on_delete=models.PROTECT,
+        related_name='+',
+        blank=True,
+        null=True
+    )
+    assigned_object_id = models.PositiveBigIntegerField(
+        blank=True,
+        null=True
+    )
+    assigned_object = GenericForeignKey(
+        ct_field='assigned_object_type',
+        fk_field='assigned_object_id'
+    )
+
+    class Meta:
+        ordering = ('mac_address', 'pk')
+        indexes = (
+            models.Index(fields=('assigned_object_type', 'assigned_object_id')),
+        )
+        verbose_name = _('MAC address')
+        verbose_name_plural = _('MAC addresses')
+
+    def __str__(self):
+        return str(self.mac_address)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Denote the original assigned object (if any) for validation in clean()
+        self._original_assigned_object_id = self.__dict__.get('assigned_object_id')
+        self._original_assigned_object_type_id = self.__dict__.get('assigned_object_type_id')
+
+    @cached_property
+    def is_primary(self):
+        if self.assigned_object and hasattr(self.assigned_object, 'primary_mac_address'):
+            if self.assigned_object.primary_mac_address and self.assigned_object.primary_mac_address.pk == self.pk:
+                return True
+        return False
+
+    def clean(self, *args, **kwargs):
+        super().clean()
+        if self._original_assigned_object_id and self._original_assigned_object_type_id:
+            assigned_object = self.assigned_object
+            ct = ContentType.objects.get_for_id(self._original_assigned_object_type_id)
+            original_assigned_object = ct.get_object_for_this_type(pk=self._original_assigned_object_id)
+
+            if (
+                original_assigned_object.primary_mac_address
+                and original_assigned_object.primary_mac_address.pk == self.pk
+            ):
+                if not assigned_object:
+                    raise ValidationError(
+                        _("Cannot unassign MAC Address while it is designated as the primary MAC for an object")
+                    )
+                if original_assigned_object != assigned_object:
+                    raise ValidationError(
+                        _("Cannot reassign MAC Address while it is designated as the primary MAC for an object")
+                    )

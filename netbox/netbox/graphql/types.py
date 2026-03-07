@@ -1,19 +1,21 @@
-import graphene
-
+import strawberry
+import strawberry_django
 from django.contrib.contenttypes.models import ContentType
-from extras.graphql.mixins import (
-    ChangelogMixin,
-    CustomFieldsMixin,
-    JournalEntriesMixin,
-    TagsMixin,
-)
-from graphene_django import DjangoObjectType
+from strawberry.types import Info
+
+from core.graphql.mixins import ChangelogMixin
+from core.models import ObjectType as ObjectType_
+from extras.graphql.mixins import CustomFieldsMixin, JournalEntriesMixin, TagsMixin
+from users.graphql.mixins import OwnerMixin
 
 __all__ = (
     'BaseObjectType',
+    'ContentTypeType',
+    'NestedGroupObjectType',
+    'NetBoxObjectType',
     'ObjectType',
     'OrganizationalObjectType',
-    'NetBoxObjectType',
+    'PrimaryObjectType',
 )
 
 
@@ -21,26 +23,26 @@ __all__ = (
 # Base types
 #
 
-class BaseObjectType(DjangoObjectType):
+@strawberry.type
+class BaseObjectType:
     """
     Base GraphQL object type for all NetBox objects. Restricts the model queryset to enforce object permissions.
     """
-    display = graphene.String()
-    class_type = graphene.String()
-
-    class Meta:
-        abstract = True
 
     @classmethod
-    def get_queryset(cls, queryset, info):
+    def get_queryset(cls, queryset, info: Info, **kwargs):
         # Enforce object permissions on the queryset
-        return queryset.restrict(info.context.user, 'view')
+        if hasattr(queryset, 'restrict'):
+            return queryset.restrict(info.context.request.user, 'view')
+        return queryset
 
-    def resolve_display(parent, info, **kwargs):
-        return str(parent)
+    @strawberry_django.field
+    def display(self) -> str:
+        return str(self)
 
-    def resolve_class_type(parent, info, **kwargs):
-        return parent.__class__.__name__
+    @strawberry_django.field
+    def class_type(self) -> str:
+        return self.__class__.__name__
 
 
 class ObjectType(
@@ -50,21 +52,49 @@ class ObjectType(
     """
     Base GraphQL object type for unclassified models which support change logging
     """
-    class Meta:
-        abstract = True
+    pass
+
+
+class PrimaryObjectType(
+    ChangelogMixin,
+    CustomFieldsMixin,
+    JournalEntriesMixin,
+    TagsMixin,
+    OwnerMixin,
+    BaseObjectType
+):
+    """
+    Base GraphQL type for models which inherit from PrimaryModel.
+    """
+    pass
 
 
 class OrganizationalObjectType(
     ChangelogMixin,
     CustomFieldsMixin,
+    JournalEntriesMixin,
     TagsMixin,
+    OwnerMixin,
     BaseObjectType
 ):
     """
-    Base type for organizational models
+    Base GraphQL type for models which inherit from OrganizationalModel.
     """
-    class Meta:
-        abstract = True
+    pass
+
+
+class NestedGroupObjectType(
+    ChangelogMixin,
+    CustomFieldsMixin,
+    JournalEntriesMixin,
+    TagsMixin,
+    OwnerMixin,
+    BaseObjectType
+):
+    """
+    Base GraphQL type for models which inherit from NestedGroupModel.
+    """
+    pass
 
 
 class NetBoxObjectType(
@@ -74,19 +104,26 @@ class NetBoxObjectType(
     TagsMixin,
     BaseObjectType
 ):
-    """
-    GraphQL type for most NetBox models. Includes support for custom fields, change logging, journaling, and tags.
-    """
-    class Meta:
-        abstract = True
+    pass
 
 
 #
 # Miscellaneous types
 #
 
-class ContentTypeType(DjangoObjectType):
+@strawberry_django.type(
+    ContentType,
+    fields=['id', 'app_label', 'model'],
+    pagination=True
+)
+class ContentTypeType:
+    pass
 
-    class Meta:
-        model = ContentType
-        fields = ('id', 'app_label', 'model')
+
+@strawberry_django.type(
+    ObjectType_,
+    fields=['id', 'app_label', 'model'],
+    pagination=True
+)
+class ObjectTypeType:
+    pass

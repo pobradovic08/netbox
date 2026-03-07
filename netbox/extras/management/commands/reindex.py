@@ -1,5 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand, CommandError
+from django.utils.translation import gettext as _
 
 from netbox.registry import registry
 from netbox.search.backends import search_backend
@@ -52,7 +53,8 @@ class Command(BaseCommand):
 
                 else:
                     raise CommandError(
-                        f"Invalid model: {label}. Model names must be in the format <app_label> or <app_label>.<model_name>."
+                        f"Invalid model: {label}. Model names must be in the format <app_label> or "
+                        f"<app_label>.<model_name>."
                     )
 
         return indexers
@@ -62,14 +64,19 @@ class Command(BaseCommand):
         # Determine which models to reindex
         indexers = self._get_indexers(*model_labels)
         if not indexers:
-            raise CommandError("No indexers found!")
+            raise CommandError(_("No indexers found!"))
         self.stdout.write(f'Reindexing {len(indexers)} models.')
 
-        # Clear all cached values for the specified models (if not being lazy)
+        # Clear cached values for the specified models (if not being lazy)
         if not kwargs['lazy']:
+            if model_labels:
+                content_types = [ContentType.objects.get_for_model(model) for model in indexers.keys()]
+            else:
+                content_types = None
+
             self.stdout.write('Clearing cached values... ', ending='')
             self.stdout.flush()
-            deleted_count = search_backend.clear()
+            deleted_count = search_backend.clear(object_types=content_types)
             self.stdout.write(f'{deleted_count} entries deleted.')
 
         # Index models
@@ -90,9 +97,9 @@ class Command(BaseCommand):
             if i:
                 self.stdout.write(f'{i} entries cached.')
             else:
-                self.stdout.write(f'No objects found.')
+                self.stdout.write('No objects found.')
 
-        msg = f'Completed.'
+        msg = 'Completed.'
         if total_count := search_backend.size:
             msg += f' Total entries: {total_count}'
         self.stdout.write(msg, self.style.SUCCESS)

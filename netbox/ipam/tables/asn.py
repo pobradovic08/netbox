@@ -2,16 +2,16 @@ import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
 
 from ipam.models import *
-from netbox.tables import NetBoxTable, columns
-from tenancy.tables import TenancyColumnsMixin
+from netbox.tables import OrganizationalModelTable, PrimaryModelTable, columns
+from tenancy.tables import ContactsColumnMixin, TenancyColumnsMixin
 
 __all__ = (
-    'ASNTable',
     'ASNRangeTable',
+    'ASNTable',
 )
 
 
-class ASNRangeTable(TenancyColumnsMixin, NetBoxTable):
+class ASNRangeTable(TenancyColumnsMixin, OrganizationalModelTable):
     name = tables.Column(
         verbose_name=_('Name'),
         linkify=True
@@ -20,6 +20,16 @@ class ASNRangeTable(TenancyColumnsMixin, NetBoxTable):
         verbose_name=_('RIR'),
         linkify=True
     )
+    start_asdot = tables.Column(
+        accessor=tables.A('start_asdot'),
+        order_by=tables.A('start'),
+        verbose_name=_('Start (ASDOT)')
+    )
+    end_asdot = tables.Column(
+        accessor=tables.A('end_asdot'),
+        order_by=tables.A('end'),
+        verbose_name=_('End (ASDOT)')
+    )
     tags = columns.TagColumn(
         url_name='ipam:asnrange_list'
     )
@@ -27,16 +37,16 @@ class ASNRangeTable(TenancyColumnsMixin, NetBoxTable):
         verbose_name=_('ASNs')
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(OrganizationalModelTable.Meta):
         model = ASNRange
         fields = (
-            'pk', 'name', 'slug', 'rir', 'start', 'end', 'asn_count', 'tenant', 'tenant_group', 'description', 'tags',
-            'created', 'last_updated', 'actions',
+            'pk', 'name', 'slug', 'rir', 'start', 'start_asdot', 'end', 'end_asdot', 'asn_count', 'tenant',
+            'tenant_group', 'description', 'comments', 'tags', 'created', 'last_updated', 'actions',
         )
         default_columns = ('pk', 'name', 'rir', 'start', 'end', 'tenant', 'asn_count', 'description')
 
 
-class ASNTable(TenancyColumnsMixin, NetBoxTable):
+class ASNTable(TenancyColumnsMixin, ContactsColumnMixin, PrimaryModelTable):
     asn = tables.Column(
         verbose_name=_('ASN'),
         linkify=True
@@ -48,6 +58,7 @@ class ASNTable(TenancyColumnsMixin, NetBoxTable):
     asn_asdot = tables.Column(
         accessor=tables.A('asn_asdot'),
         linkify=True,
+        order_by=tables.A('asn'),
         verbose_name=_('ASDOT')
     )
     site_count = columns.LinkedCountColumn(
@@ -64,18 +75,15 @@ class ASNTable(TenancyColumnsMixin, NetBoxTable):
         linkify_item=True,
         verbose_name=_('Sites')
     )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
-    )
     tags = columns.TagColumn(
         url_name='ipam:asn_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = ASN
         fields = (
             'pk', 'asn', 'asn_asdot', 'rir', 'site_count', 'provider_count', 'tenant', 'tenant_group', 'description',
-            'comments', 'sites', 'tags', 'created', 'last_updated', 'actions',
+            'contacts', 'comments', 'sites', 'tags', 'created', 'last_updated', 'actions',
         )
         default_columns = (
             'pk', 'asn', 'rir', 'site_count', 'provider_count', 'sites', 'description', 'tenant',

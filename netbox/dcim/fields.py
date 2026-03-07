@@ -1,7 +1,8 @@
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import models
-from netaddr import AddrFormatError, EUI, eui64_unix_expanded, mac_unix_expanded
+from django.utils.translation import gettext as _
+from netaddr import EUI, AddrFormatError, eui64_unix_expanded, mac_unix_expanded
 
 from .lookups import PathContains
 
@@ -25,13 +26,16 @@ class eui64_unix_expanded_uppercase(eui64_unix_expanded):
 #
 
 class MACAddressField(models.Field):
-    description = "PostgreSQL MAC Address field"
+    description = 'PostgreSQL MAC Address field'
 
     def python_type(self):
         return EUI
 
     def from_db_value(self, value, expression, connection):
         return self.to_python(value)
+
+    def get_internal_type(self):
+        return 'CharField'
 
     def to_python(self, value):
         if value is None:
@@ -41,7 +45,7 @@ class MACAddressField(models.Field):
         try:
             return EUI(value, version=48, dialect=mac_unix_expanded_uppercase)
         except AddrFormatError:
-            raise ValidationError(f"Invalid MAC address format: {value}")
+            raise ValidationError(_("Invalid MAC address format: {value}").format(value=value))
 
     def db_type(self, connection):
         return 'macaddr'
@@ -53,7 +57,7 @@ class MACAddressField(models.Field):
 
 
 class WWNField(models.Field):
-    description = "World Wide Name field"
+    description = 'World Wide Name field'
 
     def python_type(self):
         return EUI
@@ -61,13 +65,16 @@ class WWNField(models.Field):
     def from_db_value(self, value, expression, connection):
         return self.to_python(value)
 
+    def get_internal_type(self):
+        return 'CharField'
+
     def to_python(self, value):
         if value is None:
             return value
         try:
             return EUI(value, version=64, dialect=eui64_unix_expanded_uppercase)
         except AddrFormatError:
-            raise ValidationError(f"Invalid WWN format: {value}")
+            raise ValidationError(_("Invalid WWN format: {value}").format(value=value))
 
     def db_type(self, connection):
         return 'macaddr8'

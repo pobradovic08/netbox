@@ -5,8 +5,21 @@ Custom scripting was introduced to provide a way for users to execute custom log
 * Automatically populate new devices and cables in preparation for a new site deployment
 * Create a range of new reserved prefixes or IP addresses
 * Fetch data from an external source and import it to NetBox
+* Update objects with invalid or incomplete data
 
-Custom scripts are Python code and exist outside of the official NetBox code base, so they can be updated and changed without interfering with the core NetBox installation. And because they're completely custom, there is no inherent limitation on what a script can accomplish.
+They can also be used as a mechanism for validating the integrity of data within NetBox. Script authors can define test to check object against specific rules and conditions. For example, you can write script to check that:
+
+* All top-of-rack switches have a console connection
+* Every router has a loopback interface with an IP address assigned
+* Each interface description conforms to a standard format
+* Every site has a minimum set of VLANs defined
+* All IP addresses have a parent prefix
+
+Custom scripts are Python code which exists outside the NetBox code base, so they can be updated and changed without interfering with the core NetBox installation. And because they're completely custom, there is no inherent limitation on what a script can accomplish.
+
+!!! danger "Only install trusted scripts"
+    Custom scripts have unrestricted access to change anything in the database and are inherently unsafe and should only be installed and run from trusted sources.  You should also review and set permissions for who can run scripts if the script can modify any data.
+
 
 ## Writing Custom Scripts
 
@@ -56,15 +69,12 @@ class AnotherCustomScript(Script):
 script_order = (MyCustomScript, AnotherCustomScript)
 ```
 
-## Module Attributes
-
-### `name`
-
-You can define `name` within a script module (the Python file which contains one or more scripts) to set the module name. If `name` is not defined, the module's file name will be used.
-
 ## Script Attributes
 
 Script attributes are defined under a class named `Meta` within the script. These are optional, but encouraged.
+
+!!! warning
+    These are also defined and used as properties on the base custom script class, so don't use the same names as variables or override them in your custom script.
 
 ### `name`
 
@@ -86,7 +96,7 @@ An example fieldset definition is provided below:
 
 ```python
 class MyScript(Script):
-    class Meta:
+    class Meta(Script.Meta):
         fieldsets = (
             ('First group', ('field1', 'field2', 'field3')),
             ('Second group', ('field4', 'field5')),
@@ -122,26 +132,79 @@ self.log_info(f"Running as user {username} (IP: {ip_address})...")
 
 For a complete list of available request parameters, please see the [Django documentation](https://docs.djangoproject.com/en/stable/ref/request-response/).
 
-## Reading Data from Files
-
-The Script class provides two convenience methods for reading data from files:
-
-* `load_yaml`
-* `load_json`
-
-These two methods will load data in YAML or JSON format, respectively, from files within the local path (i.e. `SCRIPTS_ROOT`).
-
 ## Logging
 
 The Script object provides a set of convenient functions for recording messages at different severity levels:
 
-* `log_debug`
-* `log_success`
-* `log_info`
-* `log_warning`
-* `log_failure`
+* `log_debug(message=None, obj=None)`
+* `log_success(message=None, obj=None)`
+* `log_info(message=None, obj=None)`
+* `log_warning(message=None, obj=None)`
+* `log_failure(message=None, obj=None)`
 
-Log messages are returned to the user upon execution of the script. Markdown rendering is supported for log messages.
+Log messages are returned to the user upon execution of the script. Markdown rendering is supported for log messages. A message may optionally be associated with a particular object by passing it as the second argument to the logging method.
+
+## Test Methods
+
+A script can define one or more test methods to report on certain conditions. All test methods must have a name beginning with `test_` and accept no arguments beyond `self`.
+
+These methods are detected and run automatically when the script is executed, unless its `run()` method has been overridden. (When overriding `run()`, `run_tests()` can be called to run all test methods present in the script.)
+
+Calling any of these logging methods without a message will increment the relevant counter, but will not generate an output line in the script's log.
+
+!!! info
+    This functionality was ported from [legacy reports](./reports.md) in NetBox v4.0.
+
+### Example
+
+```
+from dcim.choices import DeviceStatusChoices
+from dcim.models import ConsolePort, Device, PowerPort
+from extras.scripts import Script
+
+
+class DeviceConnectionsReport(Script):
+    description = "Validate the minimum physical connections for each device"
+
+    def test_console_connection(self):
+
+        # Check that every console port for every active device has a connection defined.
+        active = DeviceStatusChoices.STATUS_ACTIVE
+        for console_port in ConsolePort.objects.prefetch_related('device').filter(device__status=active):
+            if not console_port.connected_endpoints:
+                self.log_failure(
+                    f"No console connection defined for {console_port.name}",
+                    console_port.device,
+                )
+            elif not console_port.connection_status:
+                self.log_warning(
+                    f"Console connection for {console_port.name} marked as planned",
+                    console_port.device,
+                )
+            else:
+                self.log_success("Passed", console_port.device)
+
+    def test_power_connections(self):
+
+        # Check that every active device has at least two connected power supplies.
+        for device in Device.objects.filter(status=DeviceStatusChoices.STATUS_ACTIVE):
+            connected_ports = 0
+            for power_port in PowerPort.objects.filter(device=device):
+                if power_port.connected_endpoints:
+                    connected_ports += 1
+                    if not power_port.path.is_active:
+                        self.log_warning(
+                            f"Power connection for {power_port.name} marked as planned",
+                            device,
+                        )
+            if connected_ports < 2:
+                self.log_failure(
+                    f"{connected_ports} connected power supplies found (2 needed)",
+                    device,
+                )
+            else:
+                self.log_success("Passed", device)
+```
 
 ## Change Logging
 
@@ -202,6 +265,15 @@ Stores a numeric integer. Options include:
 * `min_value` - Minimum value
 * `max_value` - Maximum value
 
+### DecimalVar
+
+Stores a numeric decimal. Options include:
+
+* `min_value` - Minimum value
+* `max_value` - Maximum value
+* `max_digits` - Maximum number of digits, including decimal places
+* `decimal_places` - Number of decimal places
+
 ### BooleanVar
 
 A true/false flag. This field has no options beyond the defaults listed above.
@@ -235,7 +307,9 @@ A particular object within NetBox. Each ObjectVar must specify a particular mode
 
 * `model` - The model class
 * `query_params` - A dictionary of query parameters to use when retrieving available options (optional)
+* `context` - A custom dictionary mapping template context variables to fields, used when rendering `<option>` elements within the dropdown menu (optional; see below)
 * `null_option` - A label representing a "null" or empty choice (optional)
+* `selector` - A boolean that, when True, includes an advanced object selection widget to assist the user in identifying the desired object (optional; False by default)
 
 To limit the selections available within the list, additional query parameters can be passed as the `query_params` dictionary. For example, to show only devices with an "active" status:
 
@@ -262,6 +336,22 @@ site = ObjectVar(
 )
 ```
 
+#### Context Variables
+
+Custom context variables can be passed to override the default attribute names or to display additional information, such as a parent object.
+
+| Name          | Default         | Description                                                                  |
+|---------------|-----------------|------------------------------------------------------------------------------|
+| `value`       | `"id"`          | The attribute which contains the option's value                              |
+| `label`       | `"display"`     | The attribute used as the option's human-friendly label                      |
+| `description` | `"description"` | The attribute to use as a description                                        |
+| `depth`[^1]   | `"_depth"`      | The attribute which indicates an object's depth within a recursive hierarchy |
+| `disabled`    | --              | The attribute which, if true, signifies that the option should be disabled   |
+| `parent`      | --              | The attribute which represents the object's parent object                    |
+| `count`[^1]   | --              | The attribute which contains a numeric count of related objects              |
+
+[^1]: The value of this attribute must be a positive integer
+
 ### MultiObjectVar
 
 Similar to `ObjectVar`, but allows for the selection of multiple objects.
@@ -285,16 +375,79 @@ An IPv4 or IPv6 network with a mask. Returns a `netaddr.IPNetwork` object. Two a
 * `min_prefix_length` - Minimum length of the mask
 * `max_prefix_length` - Maximum length of the mask
 
+### DateVar
+
+A calendar date. Returns a `datetime.date` object.
+
+### DateTimeVar
+
+A complete date & time. Returns a `datetime.datetime` object.
+
 ## Running Custom Scripts
 
 !!! note
-    To run a custom script, a user must be assigned via permissions for `Extras > Script`, `Extras > ScriptModule`, and `Core > ManagedFile` objects. They must also be assigned the `extras.run_script` permission. This is achieved by assigning the user (or group) a permission on the Script object and specifying the `run` action in the admin UI as shown below.
+    To run a custom script, a user must be assigned permissions for `Extras > Script`, `Extras > Script Module`, and `Core > Managed File` objects. They must also be assigned the `extras.run_script` permission. This is achieved by assigning the user (or group) a permission on the Script object and specifying the `run` action in "Permissions" as shown below.
 
-    ![Adding the run action to a permission](../media/admin_ui_run_permission.png)
+    ![Adding the run action to a permission](../media/run_permission.png)
 
 ### Via the Web UI
 
 Custom scripts can be run via the web UI by navigating to the script, completing any required form data, and clicking the "run script" button. It is possible to schedule a script to be executed at specified time in the future. A scheduled script can be canceled by deleting the associated job result object.
+
+#### Prefilling variables via URL parameters
+
+Script form fields can be prefilled by appending query parameters to the script URL. Each parameter name must match the variable name defined on the script class. Prefilled values are treated as initial values and can be edited before execution. Multiple values can be supplied by repeating the same parameter. Query values must be percent‑encoded where required (for example, spaces as `%20`).
+
+Examples:
+
+For string and integer variables, when a script defines:
+
+```python
+from extras.scripts import Script, StringVar, IntegerVar
+
+class MyScript(Script):
+    name = StringVar()
+    count = IntegerVar()
+```
+
+the following URL prefills the `name` and `count` fields:
+
+```
+https://<netbox>/extras/scripts/<script_id>/?name=Branch42&count=3
+```
+
+For object variables (`ObjectVar`), supply the object’s primary key (PK):
+
+```
+https://<netbox>/extras/scripts/<script_id>/?device=1
+```
+
+If an object ID cannot be resolved or the object is not visible to the requesting user, the field remains unpopulated.
+
+Supported variable types:
+
+| Variable class           | Expected input                  | Example query string                        |
+|--------------------------|---------------------------------|---------------------------------------------|
+| `StringVar`              | string (percent‑encoded)        | `?name=Branch42`                            |
+| `TextVar`                | string (percent‑encoded)        | `?notes=Initial%20value`                    |
+| `IntegerVar`             | integer                         | `?count=3`                                  |
+| `DecimalVar`             | decimal number                  | `?ratio=0.75`                               |
+| `BooleanVar`             | value → `True`; empty → `False` | `?enabled=true` (True), `?enabled=` (False) |
+| `ChoiceVar`              | choice value (not label)        | `?role=edge`                                |
+| `MultiChoiceVar`         | choice values (repeat)          | `?roles=edge&roles=core`                    |
+| `ObjectVar(Device)`      | PK (integer)                    | `?device=1`                                 |
+| `MultiObjectVar(Device)` | PKs (repeat)                    | `?devices=1&devices=2`                      |
+| `IPAddressVar`           | IP address                      | `?ip=198.51.100.10`                         |
+| `IPAddressWithMaskVar`   | IP address with mask            | `?addr=192.0.2.1/24`                        |
+| `IPNetworkVar`           | IP network prefix               | `?network=2001:db8::/64`                    |
+| `DateVar`                | date `YYYY-MM-DD`               | `?date=2025-01-05`                          |
+| `DateTimeVar`            | ISO datetime                    | `?when=2025-01-05T14:30:00`                 |
+| `FileVar`                | — (not supported)               | —                                           |
+
+!!! note
+    - The parameter names above are examples; use the actual variable attribute names defined by the script.
+    - For `BooleanVar`, only an empty value (`?enabled=`) unchecks the box; any other value including `false` or `0` checks it.
+    - File uploads (`FileVar`) cannot be prefilled via URL parameters.
 
 ### Via the API
 
@@ -347,7 +500,7 @@ from extras.scripts import *
 
 class NewBranchScript(Script):
 
-    class Meta:
+    class Meta(Script.Meta):
         name = "New Branch"
         description = "Provision a new branch site"
         field_order = ['site_name', 'switch_count', 'switch_model']

@@ -1,29 +1,42 @@
 import decimal
+import json
 import re
-from datetime import datetime, date
+from datetime import date, datetime
 
 import django_filters
 from django import forms
 from django.conf import settings
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator, ValidationError
 from django.db import models
+from django.db.models import F, Func, Value
+from django.db.models.expressions import RawSQL
 from django.urls import reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
+from core.models import ObjectType
 from extras.choices import *
 from extras.data import CHOICE_SETS
-from extras.utils import FeatureQuery
+from netbox.context import query_cache
 from netbox.models import ChangeLoggedModel
 from netbox.models.features import CloningMixin, ExportTemplatesMixin
+from netbox.models.mixins import OwnerMixin
 from netbox.search import FieldTypes
 from utilities import filters
+from utilities.datetime import datetime_from_timestamp
 from utilities.forms.fields import (
-    CSVChoiceField, CSVModelChoiceField, CSVModelMultipleChoiceField, CSVMultipleChoiceField, DynamicChoiceField,
-    DynamicModelChoiceField, DynamicModelMultipleChoiceField, DynamicMultipleChoiceField, JSONField, LaxURLField,
+    CSVChoiceField,
+    CSVModelChoiceField,
+    CSVModelMultipleChoiceField,
+    CSVMultipleChoiceField,
+    DynamicChoiceField,
+    DynamicModelChoiceField,
+    DynamicModelMultipleChoiceField,
+    DynamicMultipleChoiceField,
+    JSONField,
+    LaxURLField,
 )
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import APISelect, APISelectMultiple, DatePicker, DateTimePicker
@@ -54,15 +67,35 @@ class CustomFieldManager(models.Manager.from_queryset(RestrictedQuerySet)):
         """
         Return all CustomFields assigned to the given model.
         """
-        content_type = ContentType.objects.get_for_model(model._meta.concrete_model)
-        return self.get_queryset().filter(content_types=content_type)
+        # Check the request cache before hitting the database
+        cache = query_cache.get()
+        if cache is not None:
+            if custom_fields := cache['custom_fields'].get(model._meta.model):
+                return custom_fields
+
+        content_type = ObjectType.objects.get_for_model(model._meta.concrete_model)
+        custom_fields = self.get_queryset().filter(object_types=content_type)
+
+        # Populate the request cache to avoid redundant lookups
+        if cache is not None:
+            cache['custom_fields'][model._meta.model] = custom_fields
+
+        return custom_fields
+
+    def get_defaults_for_model(self, model):
+        """
+        Return a dictionary of serialized default values for all CustomFields applicable to the given model.
+        """
+        custom_fields = self.get_for_model(model).filter(default__isnull=False)
+        return {
+            cf.name: cf.default for cf in custom_fields
+        }
 
 
-class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
-    content_types = models.ManyToManyField(
-        to=ContentType,
+class CustomField(CloningMixin, ExportTemplatesMixin, OwnerMixin, ChangeLoggedModel):
+    object_types = models.ManyToManyField(
+        to='contenttypes.ContentType',
         related_name='custom_fields',
-        limit_choices_to=FeatureQuery('custom_fields'),
         help_text=_('The object(s) to which this field applies.')
     )
     type = models.CharField(
@@ -72,8 +105,8 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         default=CustomFieldTypeChoices.TYPE_TEXT,
         help_text=_('The type of data this custom field holds')
     )
-    object_type = models.ForeignKey(
-        to=ContentType,
+    related_object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
         on_delete=models.PROTECT,
         blank=True,
         null=True,
@@ -120,7 +153,12 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     required = models.BooleanField(
         verbose_name=_('required'),
         default=False,
-        help_text=_("If true, this field is required when creating new objects or editing an existing object.")
+        help_text=_("This field is required when creating new objects or editing an existing object.")
+    )
+    unique = models.BooleanField(
+        verbose_name=_('must be unique'),
+        default=False,
+        help_text=_("The value of this field must be unique for the assigned object")
     )
     search_weight = models.PositiveSmallIntegerField(
         verbose_name=_('search weight'),
@@ -145,18 +183,30 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             'Default value for the field (must be a JSON value). Encapsulate strings with double quotes (e.g. "Foo").'
         )
     )
+    related_object_filter = models.JSONField(
+        blank=True,
+        null=True,
+        help_text=_(
+            'Filter the object selection choices using a query_params dict (must be a JSON value).'
+            'Encapsulate strings with double quotes (e.g. "Foo").'
+        )
+    )
     weight = models.PositiveSmallIntegerField(
         default=100,
         verbose_name=_('display weight'),
         help_text=_('Fields with higher weights appear lower in a form.')
     )
-    validation_minimum = models.IntegerField(
+    validation_minimum = models.DecimalField(
+        max_digits=16,
+        decimal_places=4,
         blank=True,
         null=True,
         verbose_name=_('minimum value'),
         help_text=_('Minimum allowed value (for numeric fields)')
     )
-    validation_maximum = models.IntegerField(
+    validation_maximum = models.DecimalField(
+        max_digits=16,
+        decimal_places=4,
         blank=True,
         null=True,
         verbose_name=_('maximum value'),
@@ -180,25 +230,36 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         blank=True,
         null=True
     )
-    ui_visibility = models.CharField(
+    ui_visible = models.CharField(
         max_length=50,
-        choices=CustomFieldVisibilityChoices,
-        default=CustomFieldVisibilityChoices.VISIBILITY_READ_WRITE,
-        verbose_name=_('UI visibility'),
-        help_text=_('Specifies the visibility of custom field in the UI')
+        choices=CustomFieldUIVisibleChoices,
+        default=CustomFieldUIVisibleChoices.ALWAYS,
+        verbose_name=_('UI visible'),
+        help_text=_('Specifies whether the custom field is displayed in the UI')
+    )
+    ui_editable = models.CharField(
+        max_length=50,
+        choices=CustomFieldUIEditableChoices,
+        default=CustomFieldUIEditableChoices.YES,
+        verbose_name=_('UI editable'),
+        help_text=_('Specifies whether the custom field value can be edited in the UI')
     )
     is_cloneable = models.BooleanField(
         default=False,
         verbose_name=_('is cloneable'),
         help_text=_('Replicate this value when cloning objects')
     )
+    comments = models.TextField(
+        verbose_name=_('comments'),
+        blank=True
+    )
 
     objects = CustomFieldManager()
 
     clone_fields = (
-        'content_types', 'type', 'object_type', 'group_name', 'description', 'required', 'search_weight',
-        'filter_logic', 'default', 'weight', 'validation_minimum', 'validation_maximum', 'validation_regex',
-        'choice_set', 'ui_visibility', 'is_cloneable',
+        'object_types', 'type', 'related_object_type', 'group_name', 'description', 'required', 'unique',
+        'search_weight', 'filter_logic', 'default', 'weight', 'validation_minimum', 'validation_maximum',
+        'validation_regex', 'choice_set', 'ui_visible', 'ui_editable', 'is_cloneable',
     )
 
     class Meta:
@@ -232,6 +293,12 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             return self.choice_set.choices
         return []
 
+    def get_ui_visible_color(self):
+        return CustomFieldUIVisibleChoices.colors.get(self.ui_visible)
+
+    def get_ui_editable_color(self):
+        return CustomFieldUIEditableChoices.colors.get(self.ui_editable)
+
     def get_choice_label(self, value):
         if not hasattr(self, '_choice_map'):
             self._choice_map = dict(self.choices)
@@ -242,12 +309,20 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         Populate initial custom field data upon either a) the creation of a new CustomField, or
         b) the assignment of an existing CustomField to new object types.
         """
+        if self.default is None:
+            # We have to convert None to a JSON null for jsonb_set()
+            value = RawSQL("'null'::jsonb", [])
+        else:
+            value = Value(self.default, models.JSONField())
         for ct in content_types:
-            model = ct.model_class()
-            instances = model.objects.exclude(**{f'custom_field_data__contains': self.name})
-            for instance in instances:
-                instance.custom_field_data[self.name] = self.default
-            model.objects.bulk_update(instances, ['custom_field_data'], batch_size=100)
+            ct.model_class().objects.update(
+                custom_field_data=Func(
+                    F('custom_field_data'),
+                    Value([self.name]),
+                    value,
+                    function='jsonb_set'
+                )
+            )
 
     def remove_stale_data(self, content_types):
         """
@@ -255,23 +330,28 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         no longer assigned to a model, or because it has been deleted).
         """
         for ct in content_types:
-            model = ct.model_class()
-            instances = model.objects.filter(custom_field_data__has_key=self.name)
-            for instance in instances:
-                del instance.custom_field_data[self.name]
-            model.objects.bulk_update(instances, ['custom_field_data'], batch_size=100)
+            if model := ct.model_class():
+                model.objects.update(
+                    custom_field_data=F('custom_field_data') - self.name
+                )
 
     def rename_object_data(self, old_name, new_name):
         """
-        Called when a CustomField has been renamed. Updates all assigned object data.
+        Called when a CustomField has been renamed. Removes the original key and inserts the new
+        one, copying the value of the old key.
         """
-        for ct in self.content_types.all():
-            model = ct.model_class()
-            params = {f'custom_field_data__{old_name}__isnull': False}
-            instances = model.objects.filter(**params)
-            for instance in instances:
-                instance.custom_field_data[new_name] = instance.custom_field_data.pop(old_name)
-            model.objects.bulk_update(instances, ['custom_field_data'], batch_size=100)
+        for ct in self.object_types.all():
+            ct.model_class().objects.update(
+                custom_field_data=Func(
+                    F('custom_field_data') - old_name,
+                    Value([new_name]),
+                    Func(
+                        F('custom_field_data'),
+                        function='jsonb_extract_path_text',
+                        template=f"to_jsonb(%(expressions)s -> '{old_name}')"
+                    ),
+                    function='jsonb_set')
+            )
 
     def clean(self):
         super().clean()
@@ -287,8 +367,8 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             except ValidationError as err:
                 raise ValidationError({
                     'default': _(
-                        'Invalid default value "{default}": {message}'
-                    ).format(default=self.default, message=err.message)
+                        'Invalid default value "{value}": {error}'
+                    ).format(value=self.default, error=err.message)
                 })
 
         # Minimum/maximum values can be set only for numeric fields
@@ -309,6 +389,12 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
                 'validation_regex': _("Regular expression validation is supported only for text and URL fields")
             })
 
+        # Uniqueness can not be enforced for boolean fields
+        if self.unique and self.type == CustomFieldTypeChoices.TYPE_BOOLEAN:
+            raise ValidationError({
+                'unique': _("Uniqueness cannot be enforced for boolean fields")
+            })
+
         # Choice set must be set on selection fields, and *only* on selection fields
         if self.type in (
                 CustomFieldTypeChoices.TYPE_SELECT,
@@ -325,16 +411,25 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
 
         # Object fields must define an object_type; other fields must not
         if self.type in (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT):
-            if not self.object_type:
+            if not self.related_object_type:
                 raise ValidationError({
-                    'object_type': _("Object fields must define an object type.")
+                    'related_object_type': _("Object fields must define an object type.")
                 })
-        elif self.object_type:
+        elif self.related_object_type:
             raise ValidationError({
-                'object_type': _(
-                    "{type_display} fields may not define an object type.")
-                .format(type_display=self.get_type_display())
+                'type': _("{type} fields may not define an object type.") .format(type=self.get_type_display())
             })
+
+        # Related object filter can be set only for object-type fields, and must contain a dictionary mapping (if set)
+        if self.related_object_filter is not None:
+            if self.type not in (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT):
+                raise ValidationError({
+                    'related_object_filter': _("A related object filter can be defined only for object fields.")
+                })
+            if type(self.related_object_filter) is not dict:
+                raise ValidationError({
+                    'related_object_filter': _("Filter must be defined as a dictionary mapping attributes to values.")
+                })
 
     def serialize(self, value):
         """
@@ -369,21 +464,29 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             except ValueError:
                 return value
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            model = self.object_type.model_class()
+            model = self.related_object_type.model_class()
             return model.objects.filter(pk=value).first()
         if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            model = self.object_type.model_class()
+            model = self.related_object_type.model_class()
             return model.objects.filter(pk__in=value)
         return value
 
-    def to_form_field(self, set_initial=True, enforce_required=True, enforce_visibility=True, for_csv_import=False):
+    def to_form_field(
+        self,
+        set_initial=True,
+        enforce_required=True,
+        enforce_visibility=True,
+        for_csv_import=False,
+        for_filterset_form=False,
+    ):
         """
         Return a form field suitable for setting a CustomField's value for an object.
 
         set_initial: Set initial data for the field. This should be False when generating a field for bulk editing.
         enforce_required: Honor the value of CustomField.required. Set to False for filtering/bulk editing.
-        enforce_visibility: Honor the value of CustomField.ui_visibility. Set to False for filtering.
+        enforce_visibility: Honor the value of CustomField.ui_visible. Set to False for filtering.
         for_csv_import: Return a form field suitable for bulk import of objects in CSV format.
+        for_filterset_form: Return a form field suitable for use in a FilterSet form.
         """
         initial = self.default if set_initial else None
         required = self.required if enforce_required else False
@@ -402,7 +505,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             field = forms.DecimalField(
                 required=required,
                 initial=initial,
-                max_digits=12,
+                max_digits=16,
                 decimal_places=4,
                 min_value=self.validation_minimum,
                 max_value=self.validation_maximum
@@ -446,7 +549,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
                     field_class = CSVMultipleChoiceField
                 field = field_class(choices=choices, required=required, initial=initial)
             else:
-                if self.type == CustomFieldTypeChoices.TYPE_SELECT:
+                if self.type == CustomFieldTypeChoices.TYPE_SELECT and not for_filterset_form:
                     field_class = DynamicChoiceField
                     widget_class = APISelect
                 else:
@@ -461,31 +564,50 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
 
         # URL
         elif self.type == CustomFieldTypeChoices.TYPE_URL:
-            field = LaxURLField(required=required, initial=initial)
+            field = LaxURLField(assume_scheme='https', required=required, initial=initial)
+            if self.validation_regex:
+                field.validators = [
+                    RegexValidator(
+                        regex=self.validation_regex,
+                        message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
+                            regex=escape(self.validation_regex)
+                        ))
+                    )
+                ]
 
         # JSON
         elif self.type == CustomFieldTypeChoices.TYPE_JSON:
-            field = JSONField(required=required, initial=initial)
+            field = JSONField(required=required, initial=json.dumps(initial) if initial is not None else None)
 
         # Object
         elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            model = self.object_type.model_class()
+            model = self.related_object_type.model_class()
             field_class = CSVModelChoiceField if for_csv_import else DynamicModelChoiceField
-            field = field_class(
-                queryset=model.objects.all(),
-                required=required,
-                initial=initial
-            )
+            kwargs = {
+                'queryset': model.objects.all(),
+                'required': required,
+                'initial': initial,
+            }
+            if not for_csv_import:
+                kwargs['query_params'] = self.related_object_filter
+                kwargs['selector'] = True
+
+            field = field_class(**kwargs)
 
         # Multiple objects
         elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            model = self.object_type.model_class()
+            model = self.related_object_type.model_class()
             field_class = CSVModelMultipleChoiceField if for_csv_import else DynamicModelMultipleChoiceField
-            field = field_class(
-                queryset=model.objects.all(),
-                required=required,
-                initial=initial,
-            )
+            kwargs = {
+                'queryset': model.objects.all(),
+                'required': required,
+                'initial': initial,
+            }
+            if not for_csv_import:
+                kwargs['query_params'] = self.related_object_filter
+                kwargs['selector'] = True
+
+            field = field_class(**kwargs)
 
         # Text
         else:
@@ -496,7 +618,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
                     RegexValidator(
                         regex=self.validation_regex,
                         message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
-                            regex=self.validation_regex
+                            regex=escape(self.validation_regex)
                         ))
                     )
                 ]
@@ -507,10 +629,8 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             field.help_text = render_markdown(self.description)
 
         # Annotate read-only fields
-        if enforce_visibility and self.ui_visibility == CustomFieldVisibilityChoices.VISIBILITY_READ_ONLY:
+        if enforce_visibility and self.ui_editable != CustomFieldUIEditableChoices.YES:
             field.disabled = True
-            prepend = '<br />' if field.help_text else ''
-            field.help_text += f'{prepend}<i class="mdi mdi-alert-circle-outline"></i> ' + _('Field is set to read-only.')
 
         return field
 
@@ -523,11 +643,19 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         kwargs = {
             'field_name': f'custom_field_data__{self.name}'
         }
+        # Native numeric filters will use `isnull` by default for empty lookups, but
+        # JSON fields require `empty` (see bug #20012).
+        if lookup_expr == 'isnull':
+            lookup_expr = 'empty'
         if lookup_expr is not None:
             kwargs['lookup_expr'] = lookup_expr
 
+        # 'Empty' lookup is always a boolean
+        if lookup_expr == 'empty':
+            filter_class = django_filters.BooleanFilter
+
         # Text/URL
-        if self.type in (
+        elif self.type in (
                 CustomFieldTypeChoices.TYPE_TEXT,
                 CustomFieldTypeChoices.TYPE_LONGTEXT,
                 CustomFieldTypeChoices.TYPE_URL,
@@ -562,8 +690,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
 
         # Multiselect
         elif self.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
-            filter_class = filters.MultiValueCharFilter
-            kwargs['lookup_expr'] = 'has_key'
+            filter_class = filters.MultiValueArrayFilter
 
         # Object
         elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -596,13 +723,20 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
                 if self.validation_regex and not re.match(self.validation_regex, value):
                     raise ValidationError(_("Value must match regex '{regex}'").format(regex=self.validation_regex))
 
+            # Validate URL field
+            elif self.type == CustomFieldTypeChoices.TYPE_URL:
+                if type(value) is not str:
+                    raise ValidationError(_("Value must be a string."))
+                if self.validation_regex and not re.match(self.validation_regex, value):
+                    raise ValidationError(_("Value must match regex '{regex}'").format(regex=self.validation_regex))
+
             # Validate integer
             elif self.type == CustomFieldTypeChoices.TYPE_INTEGER:
                 if type(value) is not int:
                     raise ValidationError(_("Value must be an integer."))
                 if self.validation_minimum is not None and value < self.validation_minimum:
                     raise ValidationError(
-                        _("Value must be at least {minimum}").format(minimum=self.validation_maximum)
+                        _("Value must be at least {minimum}").format(minimum=self.validation_minimum)
                     )
                 if self.validation_maximum is not None and value > self.validation_maximum:
                     raise ValidationError(
@@ -640,7 +774,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             elif self.type == CustomFieldTypeChoices.TYPE_DATETIME:
                 if type(value) is not datetime:
                     try:
-                        datetime.fromisoformat(value)
+                        datetime_from_timestamp(value)
                     except ValueError:
                         raise ValidationError(
                             _("Date and time values must be in ISO 8601 format (YYYY-MM-DD HH:MM:SS).")
@@ -685,7 +819,7 @@ class CustomField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
             raise ValidationError(_("Required field cannot be empty."))
 
 
-class CustomFieldChoiceSet(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
+class CustomFieldChoiceSet(CloningMixin, ExportTemplatesMixin, OwnerMixin, ChangeLoggedModel):
     """
     Represents a set of choices available for choice and multi-choice custom fields.
     """
@@ -701,6 +835,7 @@ class CustomFieldChoiceSet(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel
         max_length=50,
         choices=CustomFieldChoiceSetBaseChoices,
         blank=True,
+        null=True,
         help_text=_('Base set of predefined choices (optional)')
     )
     extra_choices = ArrayField(
@@ -725,6 +860,12 @@ class CustomFieldChoiceSet(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel
 
     def __str__(self):
         return self.name
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Cache the initial set of choices for comparison under clean()
+        self._original_extra_choices = self.__dict__.get('extra_choices')
 
     def get_absolute_url(self):
         return reverse('extras:customfieldchoiceset', args=[self.pk])
@@ -758,6 +899,42 @@ class CustomFieldChoiceSet(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel
     def clean(self):
         if not self.base_choices and not self.extra_choices:
             raise ValidationError(_("Must define base or extra choices."))
+
+        # Check for duplicate values in extra_choices
+        choice_values = [c[0] for c in self.extra_choices] if self.extra_choices else []
+        if len(set(choice_values)) != len(choice_values):
+            # At least one duplicate value is present. Find the first one and raise an error.
+            _seen = []
+            for value in choice_values:
+                if value in _seen:
+                    raise ValidationError(_("Duplicate value '{value}' found in extra choices.").format(value=value))
+                _seen.append(value)
+
+        # Check whether any choices have been removed. If so, check whether any of the removed
+        # choices are still set in custom field data for any object.
+        original_choices = set([
+            c[0] for c in self._original_extra_choices
+        ]) if self._original_extra_choices else set()
+        current_choices = set([
+            c[0] for c in self.extra_choices
+        ]) if self.extra_choices else set()
+        if removed_choices := original_choices - current_choices:
+            for custom_field in self.choices_for.all():
+                for object_type in custom_field.object_types.all():
+                    model = object_type.model_class()
+                    for choice in removed_choices:
+                        # Form the query based on the type of custom field
+                        if custom_field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
+                            query_args = {f"custom_field_data__{custom_field.name}__contains": choice}
+                        else:
+                            query_args = {f"custom_field_data__{custom_field.name}": choice}
+                        # Raise a ValidationError if there are any objects which still reference the removed choice
+                        if model.objects.filter(models.Q(**query_args)).exists():
+                            raise ValidationError(
+                                _(
+                                    "Cannot remove choice {choice} as there are {model} objects which reference it."
+                                ).format(choice=choice, model=object_type)
+                            )
 
     def save(self, *args, **kwargs):
 

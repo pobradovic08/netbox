@@ -5,19 +5,25 @@ import requests
 from django.conf import settings
 from django.core.cache import cache
 from django.core.management.base import BaseCommand
-from django.db import DEFAULT_DB_ALIAS
 from django.utils import timezone
 from packaging import version
 
-from core.models import Job
-from extras.models import ObjectChange
+from core.models import Job, ObjectChange
 from netbox.config import Config
+from utilities.proxy import resolve_proxies
 
 
 class Command(BaseCommand):
-    help = "Perform nightly housekeeping tasks. (This command can be run at any time.)"
+    help = "Perform nightly housekeeping tasks [DEPRECATED]"
 
     def handle(self, *args, **options):
+        self.stdout.write(
+            "Running this command is no longer necessary: All housekeeping tasks\n"
+            "are addressed automatically via NetBox's built-in job scheduler. It\n"
+            "will be removed in a future release.",
+            self.style.WARNING
+        )
+
         config = Config()
 
         # Clear expired authentication sessions (essentially replicating the `clearsessions` command)
@@ -54,7 +60,7 @@ class Command(BaseCommand):
                         ending=""
                     )
                     self.stdout.flush()
-                ObjectChange.objects.filter(time__lt=cutoff)._raw_delete(using=DEFAULT_DB_ALIAS)
+                ObjectChange.objects.filter(time__lt=cutoff).delete()
                 if options['verbosity']:
                     self.stdout.write("Done.", self.style.SUCCESS)
             elif options['verbosity']:
@@ -94,7 +100,10 @@ class Command(BaseCommand):
         # Check for new releases (if enabled)
         if options['verbosity']:
             self.stdout.write("[*] Checking for latest release")
-        if settings.RELEASE_CHECK_URL:
+        if settings.ISOLATED_DEPLOYMENT:
+            if options['verbosity']:
+                self.stdout.write("\tSkipping: ISOLATED_DEPLOYMENT is enabled")
+        elif settings.RELEASE_CHECK_URL:
             headers = {
                 'Accept': 'application/vnd.github.v3+json',
             }
@@ -105,7 +114,7 @@ class Command(BaseCommand):
                 response = requests.get(
                     url=settings.RELEASE_CHECK_URL,
                     headers=headers,
-                    proxies=settings.HTTP_PROXIES
+                    proxies=resolve_proxies(url=settings.RELEASE_CHECK_URL)
                 )
                 response.raise_for_status()
 
@@ -127,7 +136,7 @@ class Command(BaseCommand):
                 self.stdout.write(f"\tRequest error: {exc}", self.style.ERROR)
         else:
             if options['verbosity']:
-                self.stdout.write(f"\tSkipping: RELEASE_CHECK_URL not set")
+                self.stdout.write("\tSkipping: RELEASE_CHECK_URL not set")
 
         if options['verbosity']:
             self.stdout.write("Finished.", self.style.SUCCESS)

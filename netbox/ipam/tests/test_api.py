@@ -1,5 +1,7 @@
 import json
+import logging
 
+from django.test import tag
 from django.urls import reverse
 from netaddr import IPNetwork
 from rest_framework import status
@@ -8,7 +10,8 @@ from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer,
 from ipam.choices import *
 from ipam.models import *
 from tenancy.models import Tenant
-from utilities.testing import APITestCase, APIViewTestCases, create_test_device, disable_warnings
+from utilities.data import string_to_ranges
+from utilities.testing import APITestCase, APIViewTestCases, create_test_device, disable_logging
 
 
 class AppTest(APITestCase):
@@ -23,7 +26,7 @@ class AppTest(APITestCase):
 
 class ASNRangeTest(APIViewTestCases.APIViewTestCase):
     model = ASNRange
-    brief_fields = ['display', 'id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -135,7 +138,7 @@ class ASNRangeTest(APIViewTestCases.APIViewTestCase):
 
 class ASNTest(APIViewTestCases.APIViewTestCase):
     model = ASN
-    brief_fields = ['asn', 'display', 'id', 'url']
+    brief_fields = ['asn', 'description', 'display', 'id', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -191,7 +194,7 @@ class ASNTest(APIViewTestCases.APIViewTestCase):
 
 class VRFTest(APIViewTestCases.APIViewTestCase):
     model = VRF
-    brief_fields = ['display', 'id', 'name', 'prefix_count', 'rd', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'prefix_count', 'rd', 'url']
     create_data = [
         {
             'name': 'VRF 4',
@@ -223,7 +226,7 @@ class VRFTest(APIViewTestCases.APIViewTestCase):
 
 class RouteTargetTest(APIViewTestCases.APIViewTestCase):
     model = RouteTarget
-    brief_fields = ['display', 'id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     create_data = [
         {
             'name': '65000:1004',
@@ -252,7 +255,7 @@ class RouteTargetTest(APIViewTestCases.APIViewTestCase):
 
 class RIRTest(APIViewTestCases.APIViewTestCase):
     model = RIR
-    brief_fields = ['aggregate_count', 'display', 'id', 'name', 'slug', 'url']
+    brief_fields = ['aggregate_count', 'description', 'display', 'id', 'name', 'slug', 'url']
     create_data = [
         {
             'name': 'RIR 4',
@@ -284,7 +287,7 @@ class RIRTest(APIViewTestCases.APIViewTestCase):
 
 class AggregateTest(APIViewTestCases.APIViewTestCase):
     model = Aggregate
-    brief_fields = ['display', 'family', 'id', 'prefix', 'url']
+    brief_fields = ['description', 'display', 'family', 'id', 'prefix', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -320,10 +323,59 @@ class AggregateTest(APIViewTestCases.APIViewTestCase):
             },
         ]
 
+    @tag('regression')
+    def test_graphql_aggregate_prefix_exact(self):
+        """
+        Test case to verify aggregate prefix equality via field lookup in GraphQL API.
+        """
+
+        self.add_permissions('ipam.view_aggregate', 'ipam.view_rir')
+
+        rir = RIR.objects.create(name='RFC6598', slug='rfc6598', is_private=True)
+        aggregate1 = Aggregate.objects.create(prefix='100.64.0.0/10', rir=rir)
+        Aggregate.objects.create(prefix='203.0.113.0/24', rir=rir)
+
+        url = reverse('graphql')
+        query = """{
+            aggregate_list(filters: { prefix: { exact: "100.64.0.0/10" } }) { prefix }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+
+        prefixes = {row['prefix'] for row in data['data']['aggregate_list']}
+        self.assertIn(str(aggregate1.prefix), prefixes)
+
+    @tag('regression')
+    def test_graphql_aggregate_contains_skips_invalid(self):
+        """
+        Test the GraphQL API Aggregate `contains` filter skips invalid input.
+        """
+
+        self.add_permissions('ipam.view_aggregate', 'ipam.view_rir')
+
+        rir = RIR.objects.create(name='RIR 3', slug='rir-3', is_private=False)
+        aggregate1 = Aggregate.objects.create(prefix='100.64.0.0/10', rir=rir)
+        Aggregate.objects.create(prefix='203.0.113.0/24', rir=rir)
+
+        url = reverse('graphql')
+        query = """{
+            aggregate_list(filters: { contains: ["100.64.16.0/24", "not-a-cidr", ""] }) { prefix }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+
+        prefixes = {row['prefix'] for row in data['data']['aggregate_list']}
+        self.assertIn(str(aggregate1.prefix), prefixes)
+        # No exception occurred; invalid entries were ignored
+
 
 class RoleTest(APIViewTestCases.APIViewTestCase):
     model = Role
-    brief_fields = ['display', 'id', 'name', 'prefix_count', 'slug', 'url', 'vlan_count']
+    brief_fields = ['description', 'display', 'id', 'name', 'prefix_count', 'slug', 'url', 'vlan_count']
     create_data = [
         {
             'name': 'Role 4',
@@ -355,7 +407,7 @@ class RoleTest(APIViewTestCases.APIViewTestCase):
 
 class PrefixTest(APIViewTestCases.APIViewTestCase):
     model = Prefix
-    brief_fields = ['_depth', 'display', 'family', 'id', 'prefix', 'url']
+    brief_fields = ['_depth', 'description', 'display', 'family', 'id', 'prefix', 'url']
     create_data = [
         {
             'prefix': '192.168.4.0/24',
@@ -380,6 +432,18 @@ class PrefixTest(APIViewTestCases.APIViewTestCase):
             Prefix(prefix=IPNetwork('192.168.3.0/24')),
         )
         Prefix.objects.bulk_create(prefixes)
+
+    @tag('regression')
+    def test_clean_validates_scope(self):
+        prefix = Prefix.objects.first()
+        site = Site.objects.create(name='Test Site', slug='test-site')
+
+        data = {'scope_type': 'dcim.site', 'scope_id': site.id}
+        url = reverse('ipam-api:prefix-detail', kwargs={'pk': prefix.pk})
+        self.add_permissions('ipam.change_prefix')
+
+        response = self.client.patch(url, data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
 
     def test_list_available_prefixes(self):
         """
@@ -531,10 +595,59 @@ class PrefixTest(APIViewTestCases.APIViewTestCase):
         self.assertHttpStatus(response, status.HTTP_201_CREATED)
         self.assertEqual(len(response.data), 8)
 
+    def test_create_available_ip_with_mask(self):
+        """
+        Test the creation of an available IP address with a specific prefix length.
+        """
+        prefix = Prefix.objects.create(prefix=IPNetwork('192.0.2.0/24'))
+        url = reverse('ipam-api:prefix-available-ips', kwargs={'pk': prefix.pk})
+        self.add_permissions('ipam.view_prefix', 'ipam.add_ipaddress')
+
+        # Create an available IP with a specific prefix length
+        data = {
+            'prefix_length': 32,
+            'description': 'Test IP 1',
+        }
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['address'], '192.0.2.1/32')
+        self.assertEqual(response.data['description'], data['description'])
+
+        # Attempt to create an available IP with a prefix length less than its parent prefix
+        data = {
+            'prefix_length': 23,  # Prefix is a /24
+        }
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
+
+    @tag('regression')
+    def test_graphql_tenant_prefixes_contains_nested_skips_invalid(self):
+        """
+        Test the GraphQL API Tenant nested Prefix `contains` filter skips invalid input.
+        """
+
+        self.add_permissions('ipam.view_prefix', 'ipam.view_vrf', 'tenancy.view_tenant')
+
+        tenant = Tenant.objects.create(name='Tenant 1', slug='tenant-1')
+        vrf = VRF.objects.create(name='Test VRF 1', rd='64512:1')
+        Prefix.objects.create(prefix='10.20.0.0/16', vrf=vrf, tenant=tenant)
+        Prefix.objects.create(prefix='198.51.100.0/24', vrf=vrf)  # non-tenant
+
+        url = reverse('graphql')
+        query = """{
+            tenant_list(filters: { prefixes: { contains: ["10.20.1.0/24", "not-a-cidr"] } }) { id }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+
+        self.assertTrue(data['data']['tenant_list'])  # tenant returned
+
 
 class IPRangeTest(APIViewTestCases.APIViewTestCase):
     model = IPRange
-    brief_fields = ['display', 'end_address', 'family', 'id', 'start_address', 'url']
+    brief_fields = ['description', 'display', 'end_address', 'family', 'id', 'start_address', 'url']
     create_data = [
         {
             'start_address': '192.168.4.10/24',
@@ -630,10 +743,69 @@ class IPRangeTest(APIViewTestCases.APIViewTestCase):
         self.assertHttpStatus(response, status.HTTP_201_CREATED)
         self.assertEqual(len(response.data), 8)
 
+    @tag('regression')
+    def test_graphql_tenant_ip_ranges_parent_nested_skips_invalid(self):
+        """
+        Test the GraphQL API Tenant nested IP Range `parent` filter skips invalid input.
+        """
+
+        self.add_permissions('tenancy.view_tenant', 'ipam.view_iprange', 'ipam.view_vrf')
+
+        tenant = Tenant.objects.create(name='Tenant 1', slug='tenant-1')
+        vrf = VRF.objects.create(name='Test VRF 1', rd='64512:1')
+        IPRange.objects.create(
+            start_address=IPNetwork('10.30.0.1/24'), end_address=IPNetwork('10.30.0.255/24'), vrf=vrf, tenant=tenant
+        )
+        IPRange.objects.create(
+            start_address=IPNetwork('10.31.0.1/24'), end_address=IPNetwork('10.31.0.255/24'), vrf=vrf, tenant=tenant
+        )
+
+        url = reverse('graphql')
+        query = """{
+            tenant_list(filters: {
+                name: { exact: "Tenant 1" }
+                ip_ranges: { parent: ["10.30.0.0/24", "bogus"] }
+            }) { id }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+        self.assertTrue(data['data']['tenant_list'])  # tenant returned
+        # No exception occurred; invalid entries were ignored
+
+    @tag('regression')
+    def test_graphql_tenant_ip_ranges_contains_nested_skips_invalid(self):
+        """
+        Test the GraphQL API Tenant nested IP Range `contains` filter skips invalid input.
+        """
+
+        self.add_permissions('tenancy.view_tenant', 'ipam.view_iprange', 'ipam.view_vrf')
+
+        tenant = Tenant.objects.create(name='Tenant 2', slug='tenant-2')
+        vrf = VRF.objects.create(name='Test VRF 1', rd='64512:2')
+        IPRange.objects.create(
+            start_address=IPNetwork('10.40.0.1/24'), end_address=IPNetwork('10.40.0.255/24'), vrf=vrf, tenant=tenant
+        )
+
+        url = reverse('graphql')
+        query = """{
+            tenant_list(filters: {
+                name: { exact: "Tenant 2" }
+                ip_ranges: { contains: ["10.40.0.128/25", "###"] }
+            }) { id }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+        self.assertTrue(data['data']['tenant_list'])  # tenant returned
+        # No exception occurred; invalid entries were ignored
+
 
 class IPAddressTest(APIViewTestCases.APIViewTestCase):
     model = IPAddress
-    brief_fields = ['address', 'display', 'family', 'id', 'url']
+    brief_fields = ['address', 'description', 'display', 'family', 'id', 'url']
     create_data = [
         {
             'address': '192.168.0.4/24',
@@ -647,6 +819,9 @@ class IPAddressTest(APIViewTestCases.APIViewTestCase):
     ]
     bulk_update_data = {
         'description': 'New description',
+    }
+    graphql_filter = {
+        'address': {'lookup': 'i_exact', 'value': '192.168.0.1/24'},
     }
 
     @classmethod
@@ -696,8 +871,6 @@ class IPAddressTest(APIViewTestCases.APIViewTestCase):
         device1.primary_ip4 = ip_addresses[0]
         device1.save()
 
-        ip2 = ip_addresses[1]
-
         url = reverse('ipam-api:ipaddress-detail', kwargs={'pk': ip1.pk})
         self.add_permissions('ipam.change_ipaddress')
 
@@ -715,10 +888,79 @@ class IPAddressTest(APIViewTestCases.APIViewTestCase):
         response = self.client.patch(url, data, format='json', **self.header)
         self.assertHttpStatus(response, status.HTTP_400_BAD_REQUEST)
 
+    @tag('regression')
+    def test_graphql_device_primary_ip4_assigned_nested(self):
+        """
+        Test the GraphQL API Device nested IP Address `primary_ip4` filter.
+        """
+
+        self.add_permissions('dcim.view_device', 'dcim.view_interface', 'ipam.view_ipaddress')
+
+        site = Site.objects.create(name='Site 1')
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1')
+        device_type = DeviceType.objects.create(model='Device Type 1', manufacturer=manufacturer)
+        role = DeviceRole.objects.create(name='Switch')
+
+        device1 = Device.objects.create(name='Device 1', site=site, device_type=device_type, role=role, status='active')
+        interface1 = Interface.objects.create(name='Interface 1', device=device1, type='1000baset')
+        ip1 = IPAddress.objects.create(address='10.0.0.1/24')
+        ip1.assigned_object = interface1
+        ip1.save()
+        device1.primary_ip4 = ip1
+        device1.save()
+
+        device2 = Device.objects.create(name='Device 2', site=site, device_type=device_type, role=role, status='active')
+
+        url = reverse('graphql')
+        query = """{
+            device_list(filters: { primary_ip4: { assigned: true } }) { id name }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+
+        ids = {row['id'] for row in data['data']['device_list']}
+        self.assertIn(str(device1.pk), ids)
+        self.assertNotIn(str(device2.pk), ids)
+
+    @tag('regression')
+    def test_graphql_device_primary_ip4_parent_nested_skips_invalid(self):
+        """
+        Test the GraphQL API Device nested IP Address `parent` filter skips invalid input.
+        """
+
+        self.add_permissions('dcim.view_device', 'dcim.view_interface', 'ipam.view_ipaddress')
+
+        site = Site.objects.create(name='Site 1')
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1')
+        device_type = DeviceType.objects.create(model='Device Type 1', manufacturer=manufacturer)
+        role = DeviceRole.objects.create(name='Switch')
+
+        device1 = Device.objects.create(name='Device 1', site=site, device_type=device_type, role=role, status='active')
+        interface1 = Interface.objects.create(name='Interface 1', device=device1, type='1000baset')
+        ip1 = IPAddress.objects.create(address='192.0.2.10/24')
+        ip1.assigned_object = interface1
+        ip1.save()
+        device1.primary_ip4 = ip1
+        device1.save()
+
+        url = reverse('graphql')
+        query = """{
+            device_list(filters: { primary_ip4: { parent: ["192.0.2.0/24", "bad-cidr"] } }) { id }
+        }"""
+        response = self.client.post(url, data={'query': query}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+        data = response.json()
+        self.assertNotIn('errors', data)
+
+        ids = {row['id'] for row in data['data']['device_list']}
+        self.assertIn(str(device1.pk), ids)
+
 
 class FHRPGroupTest(APIViewTestCases.APIViewTestCase):
     model = FHRPGroup
-    brief_fields = ['display', 'group_id', 'id', 'protocol', 'url']
+    brief_fields = ['description', 'display', 'group_id', 'id', 'protocol', 'url']
     bulk_update_data = {
         'protocol': FHRPGroupProtocolChoices.PROTOCOL_GLBP,
         'group_id': 200,
@@ -730,10 +972,19 @@ class FHRPGroupTest(APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
-
         fhrp_groups = (
-            FHRPGroup(protocol=FHRPGroupProtocolChoices.PROTOCOL_VRRP2, group_id=10, auth_type=FHRPGroupAuthTypeChoices.AUTHENTICATION_PLAINTEXT, auth_key='foobar123'),
-            FHRPGroup(protocol=FHRPGroupProtocolChoices.PROTOCOL_VRRP3, group_id=20, auth_type=FHRPGroupAuthTypeChoices.AUTHENTICATION_MD5, auth_key='foobar123'),
+            FHRPGroup(
+                protocol=FHRPGroupProtocolChoices.PROTOCOL_VRRP2,
+                group_id=10,
+                auth_type=FHRPGroupAuthTypeChoices.AUTHENTICATION_PLAINTEXT,
+                auth_key='foobar123',
+            ),
+            FHRPGroup(
+                protocol=FHRPGroupProtocolChoices.PROTOCOL_VRRP3,
+                group_id=20,
+                auth_type=FHRPGroupAuthTypeChoices.AUTHENTICATION_MD5,
+                auth_key='foobar123',
+            ),
             FHRPGroup(protocol=FHRPGroupProtocolChoices.PROTOCOL_HSRP, group_id=30),
         )
         FHRPGroup.objects.bulk_create(fhrp_groups)
@@ -760,10 +1011,11 @@ class FHRPGroupTest(APIViewTestCases.APIViewTestCase):
 
 class FHRPGroupAssignmentTest(APIViewTestCases.APIViewTestCase):
     model = FHRPGroupAssignment
-    brief_fields = ['display', 'group_id', 'id', 'interface_id', 'interface_type', 'priority', 'url']
+    brief_fields = ['display', 'group', 'id', 'interface_id', 'interface_type', 'priority', 'url']
     bulk_update_data = {
         'priority': 100,
     }
+    user_permissions = ('ipam.view_fhrpgroup', )
 
     @classmethod
     def setUpTestData(cls):
@@ -839,19 +1091,22 @@ class FHRPGroupAssignmentTest(APIViewTestCases.APIViewTestCase):
 
 class VLANGroupTest(APIViewTestCases.APIViewTestCase):
     model = VLANGroup
-    brief_fields = ['display', 'id', 'name', 'slug', 'url', 'vlan_count']
+    brief_fields = ['description', 'display', 'id', 'name', 'slug', 'url', 'vlan_count']
     create_data = [
         {
             'name': 'VLAN Group 4',
             'slug': 'vlan-group-4',
+            'vid_ranges': [[1, 4094]]
         },
         {
             'name': 'VLAN Group 5',
             'slug': 'vlan-group-5',
+            'vid_ranges': [[1, 4094]]
         },
         {
             'name': 'VLAN Group 6',
             'slug': 'vlan-group-6',
+            'vid_ranges': [[1, 4094]]
         },
     ]
     bulk_update_data = {
@@ -879,8 +1134,7 @@ class VLANGroupTest(APIViewTestCases.APIViewTestCase):
         vlangroup = VLANGroup.objects.create(
             name='VLAN Group X',
             slug='vlan-group-x',
-            min_vid=MIN_VID,
-            max_vid=MAX_VID
+            vid_ranges=string_to_ranges(f"{MIN_VID}-{MAX_VID}")
         )
 
         # Create a set of VLANs within the group
@@ -960,7 +1214,7 @@ class VLANGroupTest(APIViewTestCases.APIViewTestCase):
 
 class VLANTest(APIViewTestCases.APIViewTestCase):
     model = VLAN
-    brief_fields = ['display', 'id', 'name', 'url', 'vid']
+    brief_fields = ['description', 'display', 'id', 'name', 'url', 'vid']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -978,6 +1232,7 @@ class VLANTest(APIViewTestCases.APIViewTestCase):
             VLAN(name='VLAN 1', vid=1, group=vlan_groups[0]),
             VLAN(name='VLAN 2', vid=2, group=vlan_groups[0]),
             VLAN(name='VLAN 3', vid=3, group=vlan_groups[0]),
+            VLAN(name='SVLAN 1', vid=1001, qinq_role=VLANQinQRoleChoices.ROLE_SERVICE),
         )
         VLAN.objects.bulk_create(vlans)
 
@@ -997,6 +1252,12 @@ class VLANTest(APIViewTestCases.APIViewTestCase):
                 'name': 'VLAN 6',
                 'group': vlan_groups[1].pk,
             },
+            {
+                'vid': 2001,
+                'name': 'CVLAN 1',
+                'qinq_role': VLANQinQRoleChoices.ROLE_CUSTOMER,
+                'qinq_svlan': vlans[3].pk,
+            },
         ]
 
     def test_delete_vlan_with_prefix(self):
@@ -1008,7 +1269,7 @@ class VLANTest(APIViewTestCases.APIViewTestCase):
 
         self.add_permissions('ipam.delete_vlan')
         url = reverse('ipam-api:vlan-detail', kwargs={'pk': vlan.pk})
-        with disable_warnings('netbox.api.views.ModelViewSet'):
+        with disable_logging(level=logging.WARNING):
             response = self.client.delete(url, **self.header)
 
         self.assertHttpStatus(response, status.HTTP_409_CONFLICT)
@@ -1018,12 +1279,124 @@ class VLANTest(APIViewTestCases.APIViewTestCase):
         self.assertTrue(content['detail'].startswith('Unable to delete object.'))
 
 
-class ServiceTemplateTest(APIViewTestCases.APIViewTestCase):
-    model = ServiceTemplate
-    brief_fields = ['display', 'id', 'name', 'ports', 'protocol', 'url']
+class VLANTranslationPolicyTest(APIViewTestCases.APIViewTestCase):
+    model = VLANTranslationPolicy
+    brief_fields = ['description', 'display', 'id', 'name', 'url',]
     bulk_update_data = {
         'description': 'New description',
     }
+
+    @classmethod
+    def setUpTestData(cls):
+
+        vlan_translation_policies = (
+            VLANTranslationPolicy(
+                name='Policy 1',
+                description='foobar1',
+            ),
+            VLANTranslationPolicy(
+                name='Policy 2',
+                description='foobar2',
+            ),
+            VLANTranslationPolicy(
+                name='Policy 3',
+                description='foobar3',
+            ),
+        )
+        VLANTranslationPolicy.objects.bulk_create(vlan_translation_policies)
+
+        cls.create_data = [
+            {
+                'name': 'Policy 4',
+                'description': 'foobar4',
+            },
+            {
+                'name': 'Policy 5',
+                'description': 'foobar5',
+            },
+            {
+                'name': 'Policy 6',
+                'description': 'foobar6',
+            },
+        ]
+
+
+class VLANTranslationRuleTest(APIViewTestCases.APIViewTestCase):
+    model = VLANTranslationRule
+    brief_fields = ['description', 'display', 'id', 'local_vid', 'policy', 'remote_vid', 'url']
+
+    @classmethod
+    def setUpTestData(cls):
+
+        vlan_translation_policies = (
+            VLANTranslationPolicy(
+                name='Policy 1',
+                description='foobar1',
+            ),
+            VLANTranslationPolicy(
+                name='Policy 2',
+                description='foobar2',
+            ),
+            VLANTranslationPolicy(
+                name='Policy 3',
+                description='foobar2',
+            ),
+        )
+        VLANTranslationPolicy.objects.bulk_create(vlan_translation_policies)
+
+        vlan_translation_rules = (
+            VLANTranslationRule(
+                policy=vlan_translation_policies[0],
+                local_vid=100,
+                remote_vid=200,
+                description='foo',
+            ),
+            VLANTranslationRule(
+                policy=vlan_translation_policies[0],
+                local_vid=101,
+                remote_vid=201,
+                description='bar',
+            ),
+            VLANTranslationRule(
+                policy=vlan_translation_policies[1],
+                local_vid=102,
+                remote_vid=202,
+                description='baz',
+            ),
+        )
+        VLANTranslationRule.objects.bulk_create(vlan_translation_rules)
+
+        cls.create_data = [
+            {
+                'policy': vlan_translation_policies[0].pk,
+                'local_vid': 300,
+                'remote_vid': 400,
+            },
+            {
+                'policy': vlan_translation_policies[0].pk,
+                'local_vid': 301,
+                'remote_vid': 401,
+            },
+            {
+                'policy': vlan_translation_policies[1].pk,
+                'local_vid': 302,
+                'remote_vid': 402,
+            },
+        ]
+
+        cls.bulk_update_data = {
+            'policy': vlan_translation_policies[2].pk,
+            'description': 'New description',
+        }
+
+
+class ServiceTemplateTest(APIViewTestCases.APIViewTestCase):
+    model = ServiceTemplate
+    brief_fields = ['description', 'display', 'id', 'name', 'ports', 'protocol', 'url']
+    bulk_update_data = {
+        'description': 'New description',
+    }
+    graphql_base_name = 'service_template'
 
     @classmethod
     def setUpTestData(cls):
@@ -1055,10 +1428,11 @@ class ServiceTemplateTest(APIViewTestCases.APIViewTestCase):
 
 class ServiceTest(APIViewTestCases.APIViewTestCase):
     model = Service
-    brief_fields = ['display', 'id', 'name', 'ports', 'protocol', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'ports', 'protocol', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
+    graphql_base_name = 'service'
 
     @classmethod
     def setUpTestData(cls):
@@ -1074,122 +1448,32 @@ class ServiceTest(APIViewTestCases.APIViewTestCase):
         Device.objects.bulk_create(devices)
 
         services = (
-            Service(device=devices[0], name='Service 1', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[1]),
-            Service(device=devices[0], name='Service 2', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[2]),
-            Service(device=devices[0], name='Service 3', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[3]),
+            Service(parent=devices[0], name='Service 1', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[1]),
+            Service(parent=devices[0], name='Service 2', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[2]),
+            Service(parent=devices[0], name='Service 3', protocol=ServiceProtocolChoices.PROTOCOL_TCP, ports=[3]),
         )
         Service.objects.bulk_create(services)
 
         cls.create_data = [
             {
-                'device': devices[1].pk,
+                'parent_object_id': devices[1].pk,
+                'parent_object_type': 'dcim.device',
                 'name': 'Service 4',
                 'protocol': ServiceProtocolChoices.PROTOCOL_TCP,
                 'ports': [4],
             },
             {
-                'device': devices[1].pk,
+                'parent_object_id': devices[1].pk,
+                'parent_object_type': 'dcim.device',
                 'name': 'Service 5',
                 'protocol': ServiceProtocolChoices.PROTOCOL_TCP,
                 'ports': [5],
             },
             {
-                'device': devices[1].pk,
+                'parent_object_id': devices[1].pk,
+                'parent_object_type': 'dcim.device',
                 'name': 'Service 6',
                 'protocol': ServiceProtocolChoices.PROTOCOL_TCP,
                 'ports': [6],
             },
         ]
-
-
-class L2VPNTest(APIViewTestCases.APIViewTestCase):
-    model = L2VPN
-    brief_fields = ['display', 'id', 'identifier', 'name', 'slug', 'type', 'url']
-    create_data = [
-        {
-            'name': 'L2VPN 4',
-            'slug': 'l2vpn-4',
-            'type': 'vxlan',
-            'identifier': 33343344
-        },
-        {
-            'name': 'L2VPN 5',
-            'slug': 'l2vpn-5',
-            'type': 'vxlan',
-            'identifier': 33343345
-        },
-        {
-            'name': 'L2VPN 6',
-            'slug': 'l2vpn-6',
-            'type': 'vpws',
-            'identifier': 33343346
-        },
-    ]
-    bulk_update_data = {
-        'description': 'New description',
-    }
-
-    @classmethod
-    def setUpTestData(cls):
-
-        l2vpns = (
-            L2VPN(name='L2VPN 1', slug='l2vpn-1', type='vxlan', identifier=650001),
-            L2VPN(name='L2VPN 2', slug='l2vpn-2', type='vpws', identifier=650002),
-            L2VPN(name='L2VPN 3', slug='l2vpn-3', type='vpls'),  # No RD
-        )
-        L2VPN.objects.bulk_create(l2vpns)
-
-
-class L2VPNTerminationTest(APIViewTestCases.APIViewTestCase):
-    model = L2VPNTermination
-    brief_fields = ['display', 'id', 'l2vpn', 'url']
-
-    @classmethod
-    def setUpTestData(cls):
-
-        vlans = (
-            VLAN(name='VLAN 1', vid=651),
-            VLAN(name='VLAN 2', vid=652),
-            VLAN(name='VLAN 3', vid=653),
-            VLAN(name='VLAN 4', vid=654),
-            VLAN(name='VLAN 5', vid=655),
-            VLAN(name='VLAN 6', vid=656),
-            VLAN(name='VLAN 7', vid=657)
-        )
-        VLAN.objects.bulk_create(vlans)
-
-        l2vpns = (
-            L2VPN(name='L2VPN 1', slug='l2vpn-1', type='vxlan', identifier=650001),
-            L2VPN(name='L2VPN 2', slug='l2vpn-2', type='vpws', identifier=650002),
-            L2VPN(name='L2VPN 3', slug='l2vpn-3', type='vpls'),  # No RD
-        )
-        L2VPN.objects.bulk_create(l2vpns)
-
-        l2vpnterminations = (
-            L2VPNTermination(l2vpn=l2vpns[0], assigned_object=vlans[0]),
-            L2VPNTermination(l2vpn=l2vpns[0], assigned_object=vlans[1]),
-            L2VPNTermination(l2vpn=l2vpns[0], assigned_object=vlans[2])
-        )
-        L2VPNTermination.objects.bulk_create(l2vpnterminations)
-
-        cls.create_data = [
-            {
-                'l2vpn': l2vpns[0].pk,
-                'assigned_object_type': 'ipam.vlan',
-                'assigned_object_id': vlans[3].pk,
-            },
-            {
-                'l2vpn': l2vpns[0].pk,
-                'assigned_object_type': 'ipam.vlan',
-                'assigned_object_id': vlans[4].pk,
-            },
-            {
-                'l2vpn': l2vpns[0].pk,
-                'assigned_object_type': 'ipam.vlan',
-                'assigned_object_id': vlans[5].pk,
-            },
-        ]
-
-        cls.bulk_update_data = {
-            'l2vpn': l2vpns[2].pk
-        }

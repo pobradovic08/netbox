@@ -5,17 +5,19 @@
 
 ALLOWED_HOSTS = ['*']
 
-DATABASE = {
-    'NAME': 'netbox',
-    'USER': 'netbox',
-    'PASSWORD': 'netbox',
-    'HOST': 'localhost',
-    'PORT': '',
-    'CONN_MAX_AGE': 300,
+DATABASES = {
+    'default': {
+        'NAME': 'netbox',
+        'USER': 'netbox',
+        'PASSWORD': 'netbox',
+        'HOST': 'localhost',
+        'PORT': '',
+        'CONN_MAX_AGE': 300,
+    }
 }
 
 PLUGINS = [
-    'extras.tests.dummy_plugin',
+    'netbox.tests.dummy_plugin',
 ]
 
 REDIS = {
@@ -40,6 +42,10 @@ REDIS = {
 SECRET_KEY = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
 
 DEFAULT_PERMISSIONS = {}
+
+API_TOKEN_PEPPERS = {
+    1: 'TEST-VALUE-DO-NOT-USE-TEST-VALUE-DO-NOT-USE-TEST-VALUE-DO-NOT-USE',
+}
 
 LOGGING = {
     'version': 1,

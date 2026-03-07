@@ -3,7 +3,7 @@
 This documentation provides example configurations for both [nginx](https://www.nginx.com/resources/wiki/) and [Apache](https://httpd.apache.org/docs/current/), though any HTTP server which supports WSGI should be compatible.
 
 !!! info
-    For the sake of brevity, only Ubuntu 20.04 instructions are provided here. These tasks are not unique to NetBox and should carry over to other distributions with minimal changes. Please consult your distribution's documentation for assistance if needed.
+    For the sake of brevity, only Ubuntu 24.04 instructions are provided here. These tasks are not unique to NetBox and should carry over to other distributions with minimal changes. Please consult your distribution's documentation for assistance if needed.
 
 ## Obtain an SSL Certificate
 
@@ -34,6 +34,9 @@ Once nginx is installed, copy the nginx configuration file provided by NetBox to
 ```no-highlight
 sudo cp /opt/netbox/contrib/nginx.conf /etc/nginx/sites-available/netbox
 ```
+
+!!! tip "gunicorn vs. uWSGI"
+    The reference nginx configuration file assumes that gunicorn is in use. If using uWSGI instead, you'll need to remove the gunicorn-specific configuration (lines beginning with `proxy_pass` and `proxy_set_header`) and uncomment the uWSGI section below them before proceeding.
 
 Then, delete `/etc/nginx/sites-enabled/default` and create a symlink in the `sites-enabled` directory to the configuration file you just created.
 

@@ -1,6 +1,9 @@
-from django.utils.translation import gettext as _
+from django.conf import settings
+from django.utils.translation import gettext_lazy as _
+
 from netbox.registry import registry
 from users.preferences import UserPreference
+from utilities.constants import CSV_DELIMITERS
 from utilities.paginator import EnhancedPaginator
 
 
@@ -10,16 +13,40 @@ def get_page_lengths():
     ]
 
 
+def get_csv_delimiters():
+    choices = []
+    for k, v in CSV_DELIMITERS.items():
+        label = _(k.title())
+        if v.strip():
+            label = f'{label} ({v})'
+        choices.append((k, label))
+    return choices
+
+
 PREFERENCES = {
 
     # User interface
-    'ui.colormode': UserPreference(
-        label=_('Color mode'),
+    'locale.language': UserPreference(
+        label=_('Language'),
         choices=(
-            ('light', 'Light'),
-            ('dark', 'Dark'),
+            ('', _('Auto')),
+            *settings.LANGUAGES,
         ),
-        default='light',
+        description=_('Forces UI translation to the specified language'),
+        warning=(
+            _("Support for translation has been disabled locally")
+            if not settings.TRANSLATION_ENABLED
+            else ''
+        )
+    ),
+    'ui.copilot_enabled': UserPreference(
+        label=_('NetBox Copilot'),
+        choices=(
+            ('', _('Disabled')),
+            ('true', _('Enabled')),
+        ),
+        description=_('Enable the NetBox Copilot AI agent'),
+        default=False,
     ),
     'pagination.per_page': UserPreference(
         label=_('Page length'),
@@ -30,12 +57,20 @@ PREFERENCES = {
     'pagination.placement': UserPreference(
         label=_('Paginator placement'),
         choices=(
-            ('bottom', 'Bottom'),
-            ('top', 'Top'),
-            ('both', 'Both'),
+            ('bottom', _('Bottom')),
+            ('top', _('Top')),
+            ('both', _('Both')),
         ),
-        description=_('Where the paginator controls will be displayed relative to a table'),
-        default='bottom'
+        default='bottom',
+        description=_('Where the paginator controls will be displayed relative to a table')
+    ),
+    'ui.tables.striping': UserPreference(
+        label=_('Striped table rows'),
+        choices=(
+            ('', _('Disabled')),
+            ('true', _('Enabled')),
+        ),
+        description=_('Render table rows with alternating colors to increase readability'),
     ),
 
     # Miscellaneous
@@ -45,6 +80,13 @@ PREFERENCES = {
             ('json', 'JSON'),
             ('yaml', 'YAML'),
         ),
+        description=_('The preferred syntax for displaying generic data within the UI')
+    ),
+    'csv_delimiter': UserPreference(
+        label=_('CSV delimiter'),
+        choices=get_csv_delimiters(),
+        default='comma',
+        description=_('The character used to separate fields in CSV data')
     ),
 
 }

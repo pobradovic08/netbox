@@ -1,14 +1,18 @@
 import logging
 import os
+from functools import cached_property
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.core.files.storage import storages
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext as _
 
-from ..choices import ManagedFileRootPathChoices
+from extras.storage import ScriptFileSystemStorage
 from netbox.models.features import SyncedDataMixin
 from utilities.querysets import RestrictedQuerySet
+
+from ..choices import ManagedFileRootPathChoices
 
 __all__ = (
     'ManagedFile',
@@ -44,6 +48,7 @@ class ManagedFile(SyncedDataMixin, models.Model):
     )
 
     objects = RestrictedQuerySet.as_manager()
+    _netbox_private = True
 
     class Meta:
         ordering = ('file_root', 'file_path')
@@ -53,17 +58,11 @@ class ManagedFile(SyncedDataMixin, models.Model):
                 name='%(app_label)s_%(class)s_unique_root_path'
             ),
         )
-        indexes = [
-            models.Index(fields=('file_root', 'file_path'), name='core_managedfile_root_path'),
-        ]
         verbose_name = _('managed file')
         verbose_name_plural = _('managed files')
 
     def __str__(self):
         return self.name
-
-    def get_absolute_url(self):
-        return reverse('core:managedfile', args=[self.pk])
 
     @property
     def name(self):
@@ -74,20 +73,49 @@ class ManagedFile(SyncedDataMixin, models.Model):
         return os.path.join(self._resolve_root_path(), self.file_path)
 
     def _resolve_root_path(self):
-        return {
-            'scripts': settings.SCRIPTS_ROOT,
-            'reports': settings.REPORTS_ROOT,
-        }[self.file_root]
+        storage = self.storage
+        if isinstance(storage, ScriptFileSystemStorage):
+            return {
+                'scripts': settings.SCRIPTS_ROOT,
+                'reports': settings.REPORTS_ROOT,
+            }[self.file_root]
+        return ""
 
     def sync_data(self):
         if self.data_file:
             self.file_path = os.path.basename(self.data_path)
-            self.data_file.write_to_disk(self.full_path, overwrite=True)
+
+            storage = self.storage
+
+            with storage.open(self.full_path, 'wb+') as new_file:
+                new_file.write(self.data_file.data)
+    sync_data.alters_data = True
+
+    @cached_property
+    def storage(self):
+        return storages.create_storage(storages.backends["scripts"])
+
+    def clean(self):
+        super().clean()
+
+        if self.data_file and not self.file_path:
+            self.file_path = os.path.basename(self.data_path)
+
+        # Ensure that the file root and path make a unique pair
+        if self._meta.model.objects.filter(
+                file_root=self.file_root, file_path=self.file_path
+        ).exclude(pk=self.pk).exists():
+            raise ValidationError(
+                _("A {model} with this file path already exists ({path}).").format(
+                    model=self._meta.verbose_name.lower(),
+                    path=f"{self.file_root}/{self.file_path}"
+                ))
 
     def delete(self, *args, **kwargs):
         # Delete file from disk
+        storage = self.storage
         try:
-            os.remove(self.full_path)
+            storage.delete(self.full_path)
         except FileNotFoundError:
             pass
 

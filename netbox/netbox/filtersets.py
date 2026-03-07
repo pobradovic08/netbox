@@ -1,27 +1,44 @@
-import django_filters
+import json
 from copy import deepcopy
+
+import django_filters
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.db.models import Q
+from django.utils.translation import gettext as _
 from django_filters.exceptions import FieldLookupError
 from django_filters.utils import get_model_field, resolve_field
-from django.utils.translation import gettext as _
 
-from extras.choices import CustomFieldFilterLogicChoices, ObjectChangeActionChoices
-from extras.filters import TagFilter
-from extras.models import CustomField, ObjectChange, SavedFilter
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange
+from extras.choices import CustomFieldFilterLogicChoices
+from extras.filters import TagFilter, TagIDFilter
+from extras.models import CustomField, SavedFilter
+from users.filterset_mixins import OwnerFilterMixin
+from utilities import filters
 from utilities.constants import (
-    FILTER_CHAR_BASED_LOOKUP_MAP, FILTER_NEGATION_LOOKUP_MAP, FILTER_TREENODE_NEGATION_LOOKUP_MAP,
-    FILTER_NUMERIC_BASED_LOOKUP_MAP
+    FILTER_CHAR_BASED_LOOKUP_MAP,
+    FILTER_NEGATION_LOOKUP_MAP,
+    FILTER_NUMERIC_BASED_LOOKUP_MAP,
+    FILTER_TREENODE_NEGATION_LOOKUP_MAP,
 )
 from utilities.forms.fields import MACAddressField
-from utilities import filters
 
 __all__ = (
+    'AttributeFiltersMixin',
     'BaseFilterSet',
     'ChangeLoggedModelFilterSet',
+    'NestedGroupModelFilterSet',
     'NetBoxModelFilterSet',
     'OrganizationalModelFilterSet',
+    'PrimaryModelFilterSet',
+)
+
+STANDARD_LOOKUPS = (
+    'exact',
+    'iexact',
+    'in',
+    'contains',
 )
 
 
@@ -121,22 +138,23 @@ class BaseFilterSet(django_filters.FilterSet):
         )):
             return FILTER_NUMERIC_BASED_LOOKUP_MAP
 
-        elif isinstance(existing_filter, (
+        if isinstance(existing_filter, (
             filters.TreeNodeMultipleChoiceFilter,
         )):
             # TreeNodeMultipleChoiceFilter only support negation but must maintain the `in` lookup expression
             return FILTER_TREENODE_NEGATION_LOOKUP_MAP
 
-        elif isinstance(existing_filter, (
+        if isinstance(existing_filter, (
             django_filters.ModelChoiceFilter,
             django_filters.ModelMultipleChoiceFilter,
             TagFilter
-        )) or existing_filter.extra.get('choices'):
+        )):
             # These filter types support only negation
             return FILTER_NEGATION_LOOKUP_MAP
 
-        elif isinstance(existing_filter, (
+        if isinstance(existing_filter, (
             django_filters.filters.CharFilter,
+            django_filters.ChoiceFilter,
             django_filters.MultipleChoiceFilter,
             filters.MultiValueCharFilter,
             filters.MultiValueMACAddressFilter
@@ -154,7 +172,7 @@ class BaseFilterSet(django_filters.FilterSet):
             return {}
 
         # Skip nonstandard lookup expressions
-        if existing_filter.method is not None or existing_filter.lookup_expr not in ['exact', 'iexact', 'in']:
+        if existing_filter.method is not None or existing_filter.lookup_expr not in STANDARD_LOOKUPS:
             return {}
 
         # Choose the lookup expression map based on the filter type
@@ -170,21 +188,28 @@ class BaseFilterSet(django_filters.FilterSet):
         # Create new filters for each lookup expression in the map
         for lookup_name, lookup_expr in lookup_map.items():
             new_filter_name = f'{existing_filter_name}__{lookup_name}'
+            existing_filter_extra = deepcopy(existing_filter.extra)
 
             try:
                 if existing_filter_name in cls.declared_filters:
                     # The filter field has been explicitly defined on the filterset class so we must manually
                     # create the new filter with the same type because there is no guarantee the defined type
                     # is the same as the default type for the field
+                    if field is None:
+                        raise ValueError('Invalid field name/lookup on {}: {}'.format(existing_filter_name, field_name))
                     resolve_field(field, lookup_expr)  # Will raise FieldLookupError if the lookup is invalid
-                    filter_cls = django_filters.BooleanFilter if lookup_expr == 'empty' else type(existing_filter)
+                    filter_cls = type(existing_filter)
+                    if lookup_expr == 'empty':
+                        filter_cls = django_filters.BooleanFilter
+                        for param_to_remove in ('choices', 'null_value'):
+                            existing_filter_extra.pop(param_to_remove, None)
                     new_filter = filter_cls(
                         field_name=field_name,
                         lookup_expr=lookup_expr,
                         label=existing_filter.label,
                         exclude=existing_filter.exclude,
                         distinct=existing_filter.distinct,
-                        **existing_filter.extra
+                        **existing_filter_extra
                     )
                 elif hasattr(existing_filter, 'custom_field'):
                     # Filter is for a custom field
@@ -255,7 +280,9 @@ class ChangeLoggedModelFilterSet(BaseFilterSet):
         action = {
             'created_by_request': Q(action=ObjectChangeActionChoices.ACTION_CREATE),
             'updated_by_request': Q(action=ObjectChangeActionChoices.ACTION_UPDATE),
-            'modified_by_request': Q(action__in=[ObjectChangeActionChoices.ACTION_CREATE, ObjectChangeActionChoices.ACTION_UPDATE]),
+            'modified_by_request': Q(
+                action__in=[ObjectChangeActionChoices.ACTION_CREATE, ObjectChangeActionChoices.ACTION_UPDATE]
+            ),
         }.get(name)
         request_id = value
         pks = ObjectChange.objects.filter(
@@ -275,22 +302,18 @@ class NetBoxModelFilterSet(ChangeLoggedModelFilterSet):
         label=_('Search'),
     )
     tag = TagFilter()
+    tag_id = TagIDFilter()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Dynamically add a Filter for each CustomField applicable to the parent model
-        custom_fields = CustomField.objects.filter(
-            content_types=ContentType.objects.get_for_model(self._meta.model)
-        ).exclude(
-            filter_logic=CustomFieldFilterLogicChoices.FILTER_DISABLED
-        )
-
         custom_field_filters = {}
-        for custom_field in custom_fields:
-            filter_name = f'cf_{custom_field.name}'
-            filter_instance = custom_field.to_filter()
-            if filter_instance:
+        for custom_field in CustomField.objects.get_for_model(self._meta.model):
+            if custom_field.filter_logic == CustomFieldFilterLogicChoices.FILTER_DISABLED:
+                # Skip disabled fields
+                continue
+            if filter_instance := custom_field.to_filter():
+                filter_name = f'cf_{custom_field.name}'
                 custom_field_filters[filter_name] = filter_instance
 
                 # Add relevant additional lookups
@@ -306,14 +329,67 @@ class NetBoxModelFilterSet(ChangeLoggedModelFilterSet):
         return queryset
 
 
-class OrganizationalModelFilterSet(NetBoxModelFilterSet):
+class PrimaryModelFilterSet(OwnerFilterMixin, NetBoxModelFilterSet):
     """
-    A base class for adding the search method to models which only expose the `name` and `slug` fields
+    Base filterset for models inheriting from PrimaryModel.
+    """
+    pass
+
+
+class OrganizationalModelFilterSet(OwnerFilterMixin, NetBoxModelFilterSet):
+    """
+    Base filterset for models inheriting from OrganizationalModel.
     """
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
         return queryset.filter(
             models.Q(name__icontains=value) |
-            models.Q(slug__icontains=value)
+            models.Q(slug__icontains=value) |
+            models.Q(description__icontains=value)
         )
+
+
+class NestedGroupModelFilterSet(OwnerFilterMixin, NetBoxModelFilterSet):
+    """
+    Base filterset for models inheriting from NestedGroupModel.
+    """
+    def search(self, queryset, name, value):
+        if value.strip():
+            queryset = queryset.filter(
+                models.Q(name__icontains=value) |
+                models.Q(slug__icontains=value) |
+                models.Q(description__icontains=value) |
+                models.Q(comments__icontains=value)
+            )
+
+        return queryset
+
+
+class AttributeFiltersMixin:
+    attributes_field_name = 'attribute_data'
+    attribute_filter_prefix = 'attr_'
+
+    def __init__(self, data=None, queryset=None, *, request=None, prefix=None):
+        self.attr_filters = {}
+
+        # Extract JSONField-based filters from the incoming data
+        if data is not None:
+            for key, value in data.items():
+                if field := self._get_field_lookup(key):
+                    # Attempt to cast the value to a native JSON type
+                    try:
+                        self.attr_filters[field] = json.loads(value)
+                    except (ValueError, json.JSONDecodeError):
+                        self.attr_filters[field] = value
+
+        super().__init__(data=data, queryset=queryset, request=request, prefix=prefix)
+
+    def _get_field_lookup(self, key):
+        if not key.startswith(self.attribute_filter_prefix):
+            return None
+        lookup = key.split(self.attribute_filter_prefix, 1)[1]  # Strip prefix
+        return f'{self.attributes_field_name}__{lookup}'
+
+    def filter_queryset(self, queryset):
+        return super().filter_queryset(queryset).filter(**self.attr_filters)

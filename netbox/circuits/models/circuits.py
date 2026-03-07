@@ -1,3 +1,5 @@
+from django.apps import apps
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.urls import reverse
@@ -6,30 +8,39 @@ from django.utils.translation import gettext_lazy as _
 from circuits.choices import *
 from dcim.models import CabledObjectModel
 from netbox.models import ChangeLoggedModel, OrganizationalModel, PrimaryModel
-from netbox.models.features import ContactsMixin, CustomFieldsMixin, CustomLinksMixin, ImageAttachmentsMixin, TagsMixin
+from netbox.models.features import (
+    ContactsMixin,
+    CustomFieldsMixin,
+    CustomLinksMixin,
+    ExportTemplatesMixin,
+    ImageAttachmentsMixin,
+    TagsMixin,
+)
+from netbox.models.mixins import DistanceMixin
+
+from .base import BaseCircuitType
 
 __all__ = (
     'Circuit',
+    'CircuitGroup',
+    'CircuitGroupAssignment',
     'CircuitTermination',
     'CircuitType',
 )
 
 
-class CircuitType(OrganizationalModel):
+class CircuitType(BaseCircuitType):
     """
     Circuits can be organized by their functional role. For example, a user might wish to define CircuitTypes named
     "Long Haul," "Metro," or "Out-of-Band".
     """
-    def get_absolute_url(self):
-        return reverse('circuits:circuittype', args=[self.pk])
-
     class Meta:
         ordering = ('name',)
         verbose_name = _('circuit type')
         verbose_name_plural = _('circuit types')
 
 
-class Circuit(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
+class Circuit(ContactsMixin, ImageAttachmentsMixin, DistanceMixin, PrimaryModel):
     """
     A communications circuit connects two points. Each Circuit belongs to a Provider; Providers may have multiple
     circuits. Each circuit is also assigned a CircuitType and a Site, and may optionally be assigned to a particular
@@ -53,7 +64,7 @@ class Circuit(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
         null=True
     )
     type = models.ForeignKey(
-        to='CircuitType',
+        to='circuits.CircuitType',
         on_delete=models.PROTECT,
         related_name='circuits'
     )
@@ -105,6 +116,13 @@ class Circuit(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
         null=True
     )
 
+    group_assignments = GenericRelation(
+        to='circuits.CircuitGroupAssignment',
+        content_type_field='member_type',
+        object_id_field='member_id',
+        related_query_name='circuit'
+    )
+
     clone_fields = (
         'provider', 'provider_account', 'type', 'status', 'tenant', 'install_date', 'termination_date', 'commit_rate',
         'description',
@@ -132,9 +150,6 @@ class Circuit(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
     def __str__(self):
         return self.cid
 
-    def get_absolute_url(self):
-        return reverse('circuits:circuit', args=[self.pk])
-
     def get_status_color(self):
         return CircuitStatusChoices.colors.get(self.status)
 
@@ -145,9 +160,83 @@ class Circuit(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
             raise ValidationError({'provider_account': "The assigned account must belong to the assigned provider."})
 
 
+class CircuitGroup(OrganizationalModel):
+    """
+    An administrative grouping of Circuits.
+    """
+    tenant = models.ForeignKey(
+        to='tenancy.Tenant',
+        on_delete=models.PROTECT,
+        related_name='circuit_groups',
+        blank=True,
+        null=True
+    )
+
+    class Meta:
+        ordering = ('name',)
+        verbose_name = _('circuit group')
+        verbose_name_plural = _('circuit groups')
+
+    def __str__(self):
+        return self.name
+
+
+class CircuitGroupAssignment(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedModel):
+    """
+    Assignment of a physical or virtual circuit to a CircuitGroup with an optional priority.
+    """
+    member_type = models.ForeignKey(
+        to='contenttypes.ContentType',
+        on_delete=models.PROTECT,
+        related_name='+'
+    )
+    member_id = models.PositiveBigIntegerField(
+        verbose_name=_('member ID')
+    )
+    member = GenericForeignKey(
+        ct_field='member_type',
+        fk_field='member_id'
+    )
+    group = models.ForeignKey(
+        to='circuits.CircuitGroup',
+        on_delete=models.CASCADE,
+        related_name='assignments'
+    )
+    priority = models.CharField(
+        verbose_name=_('priority'),
+        max_length=50,
+        choices=CircuitPriorityChoices,
+        blank=True,
+        null=True
+    )
+    prerequisite_models = (
+        'circuits.CircuitGroup',
+    )
+
+    class Meta:
+        ordering = ('group', 'member_type', 'member_id', 'priority', 'pk')
+        constraints = (
+            models.UniqueConstraint(
+                fields=('member_type', 'member_id', 'group'),
+                name='%(app_label)s_%(class)s_unique_member_group'
+            ),
+        )
+        verbose_name = _('Circuit group assignment')
+        verbose_name_plural = _('Circuit group assignments')
+
+    def __str__(self):
+        if self.priority:
+            return f"{self.group} ({self.get_priority_display()})"
+        return str(self.group)
+
+    def get_absolute_url(self):
+        return reverse('circuits:circuitgroupassignment', args=[self.pk])
+
+
 class CircuitTermination(
     CustomFieldsMixin,
     CustomLinksMixin,
+    ExportTemplatesMixin,
     TagsMixin,
     ChangeLoggedModel,
     CabledObjectModel
@@ -160,21 +249,22 @@ class CircuitTermination(
     term_side = models.CharField(
         max_length=1,
         choices=CircuitTerminationSideChoices,
-        verbose_name=_('termination')
+        verbose_name=_('termination side')
     )
-    site = models.ForeignKey(
-        to='dcim.Site',
+    termination_type = models.ForeignKey(
+        to='contenttypes.ContentType',
         on_delete=models.PROTECT,
-        related_name='circuit_terminations',
+        related_name='+',
         blank=True,
         null=True
     )
-    provider_network = models.ForeignKey(
-        to='circuits.ProviderNetwork',
-        on_delete=models.PROTECT,
-        related_name='circuit_terminations',
+    termination_id = models.PositiveBigIntegerField(
         blank=True,
         null=True
+    )
+    termination = GenericForeignKey(
+        ct_field='termination_type',
+        fk_field='termination_id'
     )
     port_speed = models.PositiveIntegerField(
         verbose_name=_('port speed (Kbps)'),
@@ -206,6 +296,43 @@ class CircuitTermination(
         blank=True
     )
 
+    # Cached associations to enable efficient filtering
+    _provider_network = models.ForeignKey(
+        to='circuits.ProviderNetwork',
+        on_delete=models.PROTECT,
+        related_name='circuit_terminations',
+        blank=True,
+        null=True
+    )
+    _location = models.ForeignKey(
+        to='dcim.Location',
+        on_delete=models.CASCADE,
+        related_name='circuit_terminations',
+        blank=True,
+        null=True
+    )
+    _site = models.ForeignKey(
+        to='dcim.Site',
+        on_delete=models.CASCADE,
+        related_name='circuit_terminations',
+        blank=True,
+        null=True
+    )
+    _region = models.ForeignKey(
+        to='dcim.Region',
+        on_delete=models.CASCADE,
+        related_name='circuit_terminations',
+        blank=True,
+        null=True
+    )
+    _site_group = models.ForeignKey(
+        to='dcim.SiteGroup',
+        on_delete=models.CASCADE,
+        related_name='circuit_terminations',
+        blank=True,
+        null=True
+    )
+
     class Meta:
         ordering = ['circuit', 'term_side']
         constraints = (
@@ -214,6 +341,9 @@ class CircuitTermination(
                 name='%(app_label)s_%(class)s_unique_circuit_term_side'
             ),
         )
+        indexes = (
+            models.Index(fields=('termination_type', 'termination_id')),
+        )
         verbose_name = _('circuit termination')
         verbose_name_plural = _('circuit terminations')
 
@@ -221,16 +351,40 @@ class CircuitTermination(
         return f'{self.circuit}: Termination {self.term_side}'
 
     def get_absolute_url(self):
-        return self.circuit.get_absolute_url()
+        return reverse('circuits:circuittermination', args=[self.pk])
 
     def clean(self):
         super().clean()
 
-        # Must define either site *or* provider network
-        if self.site is None and self.provider_network is None:
-            raise ValidationError("A circuit termination must attach to either a site or a provider network.")
-        if self.site and self.provider_network:
-            raise ValidationError("A circuit termination cannot attach to both a site and a provider network.")
+        if self.termination is None:
+            raise ValidationError(_("A circuit termination must attach to a terminating object."))
+
+    def save(self, *args, **kwargs):
+        # Cache objects associated with the terminating object (for filtering)
+        self.cache_related_objects()
+
+        super().save(*args, **kwargs)
+
+    def cache_related_objects(self):
+        self._provider_network = self._region = self._site_group = self._site = self._location = None
+        if self.termination_type:
+            termination_type = self.termination_type.model_class()
+            if termination_type == apps.get_model('dcim', 'region'):
+                self._region = self.termination
+            elif termination_type == apps.get_model('dcim', 'sitegroup'):
+                self._site_group = self.termination
+            elif termination_type == apps.get_model('dcim', 'site'):
+                self._region = self.termination.region
+                self._site_group = self.termination.group
+                self._site = self.termination
+            elif termination_type == apps.get_model('dcim', 'location'):
+                self._region = self.termination.site.region
+                self._site_group = self.termination.site.group
+                self._site = self.termination.site
+                self._location = self.termination
+            elif termination_type == apps.get_model('circuits', 'providernetwork'):
+                self._provider_network = self.termination
+    cache_related_objects.alters_data = True
 
     def to_objectchange(self, action):
         objectchange = super().to_objectchange(action)
@@ -244,7 +398,7 @@ class CircuitTermination(
     def get_peer_termination(self):
         peer_side = 'Z' if self.term_side == 'A' else 'A'
         try:
-            return CircuitTermination.objects.prefetch_related('site').get(
+            return CircuitTermination.objects.prefetch_related('termination').get(
                 circuit=self.circuit,
                 term_side=peer_side
             )

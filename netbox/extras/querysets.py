@@ -1,12 +1,15 @@
-from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.aggregates import JSONBAgg
-from django.db.models import OuterRef, Subquery, Q
-from django.db.utils import ProgrammingError
+from django.db.models import OuterRef, Q, Subquery
 
 from extras.models.tags import TaggedItem
 from utilities.query_functions import EmptyGroupByJSONBAgg
 from utilities.querysets import RestrictedQuerySet
+
+__all__ = (
+    'ConfigContextModelQuerySet',
+    'ConfigContextQuerySet',
+    'NotificationQuerySet',
+)
 
 
 class ConfigContextQuerySet(RestrictedQuerySet):
@@ -19,11 +22,10 @@ class ConfigContextQuerySet(RestrictedQuerySet):
           aggregate_data: If True, use the JSONBAgg aggregate function to return only the list of JSON data objects
         """
 
-        role = obj.role
-
-        # Device type and location assignment is relevant only for Devices
+        # Device type and location assignment are relevant only for Devices
         device_type = getattr(obj, 'device_type', None)
         location = getattr(obj, 'location', None)
+        locations = location.get_ancestors(include_self=True) if location else []
 
         # Get assigned cluster, group, and type (if any)
         cluster = getattr(obj, 'cluster', None)
@@ -41,14 +43,21 @@ class ConfigContextQuerySet(RestrictedQuerySet):
         sitegroup = getattr(obj.site, 'group', None)
         sitegroups = sitegroup.get_ancestors(include_self=True) if sitegroup else []
 
+        # Match against the directly assigned role as well as any parent roles.
+        device_roles = obj.role.get_ancestors(include_self=True) if obj.role else []
+
+        # Match against the directly assigned platform as well as any parent platforms.
+        platform = getattr(obj, 'platform', None)
+        platforms = platform.get_ancestors(include_self=True) if platform else []
+
         queryset = self.filter(
             Q(regions__in=regions) | Q(regions=None),
             Q(site_groups__in=sitegroups) | Q(site_groups=None),
             Q(sites=obj.site) | Q(sites=None),
-            Q(locations=location) | Q(locations=None),
+            Q(locations__in=locations) | Q(locations=None),
             Q(device_types=device_type) | Q(device_types=None),
-            Q(roles=role) | Q(roles=None),
-            Q(platforms=obj.platform) | Q(platforms=None),
+            Q(roles__in=device_roles) | Q(roles=None),
+            Q(platforms__in=platforms) | Q(platforms=None),
             Q(cluster_types=cluster_type) | Q(cluster_types=None),
             Q(cluster_groups=cluster_group) | Q(cluster_groups=None),
             Q(clusters=cluster) | Q(clusters=None),
@@ -85,10 +94,10 @@ class ConfigContextModelQuerySet(RestrictedQuerySet):
                 ConfigContext.objects.filter(
                     self._get_config_context_filters()
                 ).annotate(
-                    _data=EmptyGroupByJSONBAgg('data', ordering=['weight', 'name'])
+                    _data=EmptyGroupByJSONBAgg('data', order_by=['weight', 'name'])
                 ).values("_data").order_by()
             )
-        ).distinct()
+        )
 
     def _get_config_context_filters(self):
         # Construct the set of Q objects for the specific object types
@@ -98,12 +107,12 @@ class ConfigContextModelQuerySet(RestrictedQuerySet):
             "content_type__model": self.model._meta.model_name
         }
         base_query = Q(
-            Q(platforms=OuterRef('platform')) | Q(platforms=None),
             Q(cluster_types=OuterRef('cluster__type')) | Q(cluster_types=None),
             Q(cluster_groups=OuterRef('cluster__group')) | Q(cluster_groups=None),
             Q(clusters=OuterRef('cluster')) | Q(clusters=None),
             Q(tenant_groups=OuterRef('tenant__group')) | Q(tenant_groups=None),
             Q(tenants=OuterRef('tenant')) | Q(tenants=None),
+            Q(sites=OuterRef('site')) | Q(sites=None),
             Q(
                 tags__pk__in=Subquery(
                     TaggedItem.objects.filter(
@@ -111,62 +120,73 @@ class ConfigContextModelQuerySet(RestrictedQuerySet):
                     ).values_list(
                         'tag_id',
                         flat=True
-                    )
+                    ).distinct()
                 )
             ) | Q(tags=None),
             is_active=True,
         )
 
+        # Apply Location & DeviceType filters only for VirtualMachines
         if self.model._meta.model_name == 'device':
-            base_query.add((Q(locations=OuterRef('location')) | Q(locations=None)), Q.AND)
+            base_query.add(
+                (Q(
+                    locations__tree_id=OuterRef('location__tree_id'),
+                    locations__level__lte=OuterRef('location__level'),
+                    locations__lft__lte=OuterRef('location__lft'),
+                    locations__rght__gte=OuterRef('location__rght'),
+                ) | Q(locations=None)),
+                Q.AND
+            )
             base_query.add((Q(device_types=OuterRef('device_type')) | Q(device_types=None)), Q.AND)
-            base_query.add((Q(roles=OuterRef('role')) | Q(roles=None)), Q.AND)
-            base_query.add((Q(sites=OuterRef('site')) | Q(sites=None)), Q.AND)
-            region_field = 'site__region'
-            sitegroup_field = 'site__group'
-
         elif self.model._meta.model_name == 'virtualmachine':
-            base_query.add((Q(roles=OuterRef('role')) | Q(roles=None)), Q.AND)
-            base_query.add((Q(sites=OuterRef('cluster__site')) | Q(sites=None)), Q.AND)
+            base_query.add(Q(locations=None), Q.AND)
             base_query.add(Q(device_types=None), Q.AND)
-            region_field = 'cluster__site__region'
-            sitegroup_field = 'cluster__site__group'
 
+        # MPTT-based filters
         base_query.add(
             (Q(
-                regions__tree_id=OuterRef(f'{region_field}__tree_id'),
-                regions__level__lte=OuterRef(f'{region_field}__level'),
-                regions__lft__lte=OuterRef(f'{region_field}__lft'),
-                regions__rght__gte=OuterRef(f'{region_field}__rght'),
+                regions__tree_id=OuterRef('site__region__tree_id'),
+                regions__level__lte=OuterRef('site__region__level'),
+                regions__lft__lte=OuterRef('site__region__lft'),
+                regions__rght__gte=OuterRef('site__region__rght'),
             ) | Q(regions=None)),
             Q.AND
         )
-
         base_query.add(
             (Q(
-                site_groups__tree_id=OuterRef(f'{sitegroup_field}__tree_id'),
-                site_groups__level__lte=OuterRef(f'{sitegroup_field}__level'),
-                site_groups__lft__lte=OuterRef(f'{sitegroup_field}__lft'),
-                site_groups__rght__gte=OuterRef(f'{sitegroup_field}__rght'),
+                site_groups__tree_id=OuterRef('site__group__tree_id'),
+                site_groups__level__lte=OuterRef('site__group__level'),
+                site_groups__lft__lte=OuterRef('site__group__lft'),
+                site_groups__rght__gte=OuterRef('site__group__rght'),
             ) | Q(site_groups=None)),
+            Q.AND
+        )
+        base_query.add(
+            (Q(
+                roles__tree_id=OuterRef('role__tree_id'),
+                roles__level__lte=OuterRef('role__level'),
+                roles__lft__lte=OuterRef('role__lft'),
+                roles__rght__gte=OuterRef('role__rght'),
+            ) | Q(roles=None)),
+            Q.AND
+        )
+        base_query.add(
+            (Q(
+                platforms__tree_id=OuterRef('platform__tree_id'),
+                platforms__level__lte=OuterRef('platform__level'),
+                platforms__lft__lte=OuterRef('platform__lft'),
+                platforms__rght__gte=OuterRef('platform__rght'),
+            ) | Q(platforms=None)),
             Q.AND
         )
 
         return base_query
 
 
-class ObjectChangeQuerySet(RestrictedQuerySet):
+class NotificationQuerySet(RestrictedQuerySet):
 
-    def valid_models(self):
-        # Exclude any change records which refer to an instance of a model that's no longer installed. This
-        # can happen when a plugin is removed but its data remains in the database, for example.
-        try:
-            content_types = ContentType.objects.get_for_models(*apps.get_models()).values()
-        except ProgrammingError:
-            # Handle the case where the database schema has not yet been initialized
-            content_types = ContentType.objects.none()
-
-        content_type_ids = set(
-            ct.pk for ct in content_types
-        )
-        return self.filter(changed_object_type_id__in=content_type_ids)
+    def unread(self):
+        """
+        Return only unread notifications.
+        """
+        return self.filter(read__isnull=True)

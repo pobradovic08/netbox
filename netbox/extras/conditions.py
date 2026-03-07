@@ -1,11 +1,14 @@
 import functools
+import operator
 import re
+
+from django.utils.translation import gettext as _
 
 __all__ = (
     'Condition',
     'ConditionSet',
+    'InvalidCondition',
 )
-
 
 AND = 'and'
 OR = 'or'
@@ -16,6 +19,10 @@ def is_ruleset(data):
     Determine whether the given dictionary looks like a rule set.
     """
     return type(data) is dict and len(data) == 1 and list(data.keys())[0] in (AND, OR)
+
+
+class InvalidCondition(Exception):
+    pass
 
 
 class Condition:
@@ -50,14 +57,17 @@ class Condition:
 
     def __init__(self, attr, value, op=EQ, negate=False):
         if op not in self.OPERATORS:
-            raise ValueError(f"Unknown operator: {op}. Must be one of: {', '.join(self.OPERATORS)}")
+            raise ValueError(_("Unknown operator: {op}. Must be one of: {operators}").format(
+                op=op, operators=', '.join(self.OPERATORS)
+            ))
         if type(value) not in self.TYPES:
-            raise ValueError(f"Unsupported value type: {type(value)}")
+            raise ValueError(_("Unsupported value type: {value}").format(value=type(value)))
         if op not in self.TYPES[type(value)]:
-            raise ValueError(f"Invalid type for {op} operation: {type(value)}")
+            raise ValueError(_("Invalid type for {op} operation: {value}").format(op=op, value=type(value)))
 
         self.attr = attr
         self.value = value
+        self.op = op
         self.eval_func = getattr(self, f'eval_{op}')
         self.negate = negate
 
@@ -67,16 +77,17 @@ class Condition:
         """
         def _get(obj, key):
             if isinstance(obj, list):
-                return [dict.get(i, key) for i in obj]
-
-            return dict.get(obj, key)
+                return [operator.getitem(item or {}, key) for item in obj]
+            return operator.getitem(obj or {}, key)
 
         try:
             value = functools.reduce(_get, self.attr.split('.'), data)
-        except TypeError:
-            # Invalid key path
-            value = None
-        result = self.eval_func(value)
+        except KeyError:
+            raise InvalidCondition(f"Invalid key path: {self.attr}")
+        try:
+            result = self.eval_func(value)
+        except TypeError as e:
+            raise InvalidCondition(f"Invalid data type at '{self.attr}' for '{self.op}' evaluation: {e}")
 
         if self.negate:
             return not result
@@ -131,21 +142,24 @@ class ConditionSet:
     """
     def __init__(self, ruleset):
         if type(ruleset) is not dict:
-            raise ValueError(f"Ruleset must be a dictionary, not {type(ruleset)}.")
-        if len(ruleset) != 1:
-            raise ValueError(f"Ruleset must have exactly one logical operator (found {len(ruleset)})")
+            raise ValueError(_("Ruleset must be a dictionary, not {ruleset}.").format(ruleset=type(ruleset)))
 
-        # Determine the logic type
-        logic = list(ruleset.keys())[0]
-        if type(logic) is not str or logic.lower() not in (AND, OR):
-            raise ValueError(f"Invalid logic type: {logic} (must be '{AND}' or '{OR}')")
-        self.logic = logic.lower()
+        if len(ruleset) == 1:
+            self.logic = (list(ruleset.keys())[0]).lower()
+            if self.logic not in (AND, OR):
+                raise ValueError(_("Invalid logic type: must be 'AND' or 'OR'. Please check documentation."))
 
-        # Compile the set of Conditions
-        self.conditions = [
-            ConditionSet(rule) if is_ruleset(rule) else Condition(**rule)
-            for rule in ruleset[self.logic]
-        ]
+            # Compile the set of Conditions
+            self.conditions = [
+                ConditionSet(rule) if is_ruleset(rule) else Condition(**rule)
+                for rule in ruleset[self.logic]
+            ]
+        else:
+            try:
+                self.logic = None
+                self.conditions = [Condition(**ruleset)]
+            except TypeError:
+                raise ValueError(_("Incorrect key(s) informed. Please check documentation."))
 
     def eval(self, data):
         """

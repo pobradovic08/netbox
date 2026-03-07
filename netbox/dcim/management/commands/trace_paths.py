@@ -4,7 +4,7 @@ from django.db import connection
 from django.db.models import Q
 
 from dcim.models import CablePath, ConsolePort, ConsoleServerPort, Interface, PowerFeed, PowerOutlet, PowerPort
-from dcim.signals import create_cablepath
+from dcim.signals import create_cablepaths
 
 ENDPOINT_MODELS = (
     ConsolePort,
@@ -34,7 +34,7 @@ class Command(BaseCommand):
         Draw a simple progress bar 20 increments wide illustrating the specified percentage.
         """
         bar_size = int(percentage / 5)
-        self.stdout.write(f"\r  [{'#' * bar_size}{' ' * (20-bar_size)}] {int(percentage)}%", ending='')
+        self.stdout.write(f"\r  [{'#' * bar_size}{' ' * (20 - bar_size)}] {int(percentage)}%", ending='')
 
     def handle(self, *model_names, **options):
 
@@ -57,10 +57,10 @@ class Command(BaseCommand):
             # Delete all existing CablePath instances
             self.stdout.write(f"Deleting {paths_count} existing cable paths...")
             deleted_count, _ = CablePath.objects.all().delete()
-            self.stdout.write((self.style.SUCCESS(f'  Deleted {deleted_count} paths')))
+            self.stdout.write(self.style.SUCCESS(f'  Deleted {deleted_count} paths'))
 
             # Reinitialize the model's PK sequence
-            self.stdout.write(f'Resetting database sequence for CablePath model')
+            self.stdout.write('Resetting database sequence for CablePath model')
             sequence_sql = connection.ops.sequence_reset_sql(no_style(), [CablePath])
             with connection.cursor() as cursor:
                 for sql in sequence_sql:
@@ -81,7 +81,7 @@ class Command(BaseCommand):
             self.stdout.write(f'Retracing {origins_count} cabled {model._meta.verbose_name_plural}...')
             i = 0
             for i, obj in enumerate(origins, start=1):
-                create_cablepath([obj])
+                create_cablepaths([obj])
                 if not i % 100:
                     self.draw_progress_bar(i * 100 / origins_count)
             self.draw_progress_bar(100)

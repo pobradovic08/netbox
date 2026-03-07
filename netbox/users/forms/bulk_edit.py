@@ -5,19 +5,24 @@ from django.utils.translation import gettext_lazy as _
 from ipam.formfields import IPNetworkFormField
 from ipam.validators import prefix_validator
 from users.models import *
-from utilities.forms import BootstrapMixin, BulkEditForm
+from utilities.forms import BulkEditForm
+from utilities.forms.fields import DynamicModelChoiceField
+from utilities.forms.rendering import FieldSet
 from utilities.forms.widgets import BulkEditNullBooleanSelect, DateTimePicker
 
 __all__ = (
+    'GroupBulkEditForm',
     'ObjectPermissionBulkEditForm',
-    'UserBulkEditForm',
+    'OwnerBulkEditForm',
+    'OwnerGroupBulkEditForm',
     'TokenBulkEditForm',
+    'UserBulkEditForm',
 )
 
 
-class UserBulkEditForm(BootstrapMixin, forms.Form):
+class UserBulkEditForm(BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
-        queryset=NetBoxUser.objects.all(),
+        queryset=User.objects.all(),
         widget=forms.MultipleHiddenInput
     )
     first_name = forms.CharField(
@@ -35,25 +40,38 @@ class UserBulkEditForm(BootstrapMixin, forms.Form):
         widget=BulkEditNullBooleanSelect,
         label=_('Active')
     )
-    is_staff = forms.NullBooleanField(
-        required=False,
-        widget=BulkEditNullBooleanSelect,
-        label=_('Staff status')
-    )
     is_superuser = forms.NullBooleanField(
         required=False,
         widget=BulkEditNullBooleanSelect,
         label=_('Superuser status')
     )
 
-    model = NetBoxUser
+    model = User
     fieldsets = (
-        (None, ('first_name', 'last_name', 'is_active', 'is_staff', 'is_superuser')),
+        FieldSet('first_name', 'last_name', 'is_active', 'is_superuser'),
     )
     nullable_fields = ('first_name', 'last_name')
 
 
-class ObjectPermissionBulkEditForm(BootstrapMixin, forms.Form):
+class GroupBulkEditForm(BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=Group.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+
+    model = User
+    fieldsets = (
+        FieldSet('description'),
+    )
+    nullable_fields = ('description',)
+
+
+class ObjectPermissionBulkEditForm(BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=ObjectPermission.objects.all(),
         widget=forms.MultipleHiddenInput
@@ -71,7 +89,7 @@ class ObjectPermissionBulkEditForm(BootstrapMixin, forms.Form):
 
     model = ObjectPermission
     fieldsets = (
-        (None, ('enabled', 'description')),
+        FieldSet('enabled', 'description'),
     )
     nullable_fields = ('description',)
 
@@ -80,6 +98,11 @@ class TokenBulkEditForm(BulkEditForm):
     pk = forms.ModelMultipleChoiceField(
         queryset=Token.objects.all(),
         widget=forms.MultipleHiddenInput
+    )
+    enabled = forms.NullBooleanField(
+        required=False,
+        widget=BulkEditNullBooleanSelect,
+        label=_('Enabled')
     )
     write_enabled = forms.NullBooleanField(
         required=False,
@@ -104,8 +127,49 @@ class TokenBulkEditForm(BulkEditForm):
 
     model = Token
     fieldsets = (
-        (None, ('write_enabled', 'description', 'expires', 'allowed_ips')),
+        FieldSet('enabled', 'write_enabled', 'description', 'expires', 'allowed_ips'),
     )
     nullable_fields = (
         'expires', 'description', 'allowed_ips',
     )
+
+
+class OwnerGroupBulkEditForm(BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=OwnerGroup.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+
+    model = OwnerGroup
+    fieldsets = (
+        FieldSet('description',),
+    )
+    nullable_fields = ('description',)
+
+
+class OwnerBulkEditForm(BulkEditForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=Owner.objects.all(),
+        widget=forms.MultipleHiddenInput
+    )
+    group = DynamicModelChoiceField(
+        label=_('Group'),
+        queryset=OwnerGroup.objects.all(),
+        required=False
+    )
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+
+    model = Owner
+    fieldsets = (
+        FieldSet('group', 'description'),
+    )
+    nullable_fields = ('group', 'description',)

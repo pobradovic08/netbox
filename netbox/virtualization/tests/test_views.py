@@ -1,13 +1,14 @@
+from django.contrib.contenttypes.models import ContentType
 from django.test import override_settings
 from django.urls import reverse
-from netaddr import EUI
 
 from dcim.choices import InterfaceModeChoices
 from dcim.models import DeviceRole, Platform, Site
+from extras.models import ConfigTemplate
 from ipam.models import VLAN, VRF
-from utilities.testing import ViewTestCases, create_tags, create_test_device
+from utilities.testing import ViewTestCases, create_tags, create_test_device, create_test_virtualmachine
 from virtualization.choices import *
-from virtualization.models import Cluster, ClusterGroup, ClusterType, VirtualMachine, VMInterface
+from virtualization.models import *
 
 
 class ClusterGroupTestCase(ViewTestCases.OrganizationalObjectViewTestCase):
@@ -117,11 +118,30 @@ class ClusterTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         ClusterType.objects.bulk_create(clustertypes)
 
         clusters = (
-            Cluster(name='Cluster 1', group=clustergroups[0], type=clustertypes[0], status=ClusterStatusChoices.STATUS_ACTIVE, site=sites[0]),
-            Cluster(name='Cluster 2', group=clustergroups[0], type=clustertypes[0], status=ClusterStatusChoices.STATUS_ACTIVE, site=sites[0]),
-            Cluster(name='Cluster 3', group=clustergroups[0], type=clustertypes[0], status=ClusterStatusChoices.STATUS_ACTIVE, site=sites[0]),
+            Cluster(
+                name='Cluster 1',
+                group=clustergroups[0],
+                type=clustertypes[0],
+                status=ClusterStatusChoices.STATUS_ACTIVE,
+                scope=sites[0],
+            ),
+            Cluster(
+                name='Cluster 2',
+                group=clustergroups[0],
+                type=clustertypes[0],
+                status=ClusterStatusChoices.STATUS_ACTIVE,
+                scope=sites[0],
+            ),
+            Cluster(
+                name='Cluster 3',
+                group=clustergroups[0],
+                type=clustertypes[0],
+                status=ClusterStatusChoices.STATUS_ACTIVE,
+                scope=sites[0],
+            ),
         )
-        Cluster.objects.bulk_create(clusters)
+        for cluster in clusters:
+            cluster.save()
 
         tags = create_tags('Alpha', 'Bravo', 'Charlie')
 
@@ -131,7 +151,8 @@ class ClusterTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'type': clustertypes[1].pk,
             'status': ClusterStatusChoices.STATUS_OFFLINE,
             'tenant': None,
-            'site': sites[1].pk,
+            'scope_type': ContentType.objects.get_for_model(Site).pk,
+            'scope': sites[1].pk,
             'comments': 'Some comments',
             'tags': [t.pk for t in tags],
         }
@@ -155,7 +176,6 @@ class ClusterTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'type': clustertypes[1].pk,
             'status': ClusterStatusChoices.STATUS_OFFLINE,
             'tenant': None,
-            'site': sites[1].pk,
             'comments': 'New comments',
         }
 
@@ -184,13 +204,15 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             DeviceRole(name='Device Role 1', slug='device-role-1'),
             DeviceRole(name='Device Role 2', slug='device-role-2'),
         )
-        DeviceRole.objects.bulk_create(roles)
+        for role in roles:
+            role.save()
 
         platforms = (
             Platform(name='Platform 1', slug='platform-1'),
             Platform(name='Platform 2', slug='platform-2'),
         )
-        Platform.objects.bulk_create(platforms)
+        for platform in platforms:
+            platform.save()
 
         sites = (
             Site(name='Site 1', slug='site-1'),
@@ -201,10 +223,11 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         clustertype = ClusterType.objects.create(name='Cluster Type 1', slug='cluster-type-1')
 
         clusters = (
-            Cluster(name='Cluster 1', type=clustertype, site=sites[0]),
-            Cluster(name='Cluster 2', type=clustertype, site=sites[1]),
+            Cluster(name='Cluster 1', type=clustertype, scope=sites[0]),
+            Cluster(name='Cluster 2', type=clustertype, scope=sites[1]),
         )
-        Cluster.objects.bulk_create(clusters)
+        for cluster in clusters:
+            cluster.save()
 
         devices = (
             create_test_device('device1', site=sites[0], cluster=clusters[0]),
@@ -212,9 +235,30 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         )
 
         virtual_machines = (
-            VirtualMachine(name='Virtual Machine 1', site=sites[0], cluster=clusters[0], device=devices[0], role=roles[0], platform=platforms[0]),
-            VirtualMachine(name='Virtual Machine 2', site=sites[0], cluster=clusters[0], device=devices[0], role=roles[0], platform=platforms[0]),
-            VirtualMachine(name='Virtual Machine 3', site=sites[0], cluster=clusters[0], device=devices[0], role=roles[0], platform=platforms[0]),
+            VirtualMachine(
+                name='Virtual Machine 1',
+                site=sites[0],
+                cluster=clusters[0],
+                device=devices[0],
+                role=roles[0],
+                platform=platforms[0],
+            ),
+            VirtualMachine(
+                name='Virtual Machine 2',
+                site=sites[0],
+                cluster=clusters[0],
+                device=devices[0],
+                role=roles[0],
+                platform=platforms[0],
+            ),
+            VirtualMachine(
+                name='Virtual Machine 3',
+                site=sites[0],
+                cluster=clusters[0],
+                device=devices[0],
+                role=roles[0],
+                platform=platforms[0],
+            ),
         )
         VirtualMachine.objects.bulk_create(virtual_machines)
 
@@ -228,12 +272,14 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'platform': platforms[1].pk,
             'name': 'Virtual Machine X',
             'status': VirtualMachineStatusChoices.STATUS_STAGED,
+            'start_on_boot': VirtualMachineStartOnBootChoices.STATUS_ON,
             'role': roles[1].pk,
             'primary_ip4': None,
             'primary_ip6': None,
             'vcpus': 4,
             'memory': 32768,
             'disk': 4000,
+            'serial': 'aaa-111',
             'comments': 'Some comments',
             'tags': [t.pk for t in tags],
             'local_context_data': None,
@@ -265,6 +311,7 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'memory': 65535,
             'disk': 8000,
             'comments': 'New comments',
+            'start_on_boot': VirtualMachineStartOnBootChoices.STATUS_OFF,
         }
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
@@ -280,6 +327,28 @@ class VirtualMachineTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         url = reverse('virtualization:virtualmachine_interfaces', kwargs={'pk': virtualmachine.pk})
         self.assertHttpStatus(self.client.get(url), 200)
 
+    def test_virtualmachine_renderconfig(self):
+        configtemplate = ConfigTemplate.objects.create(
+            name='Test Config Template',
+            template_code='Config for VM {{ virtualmachine.name }}'
+        )
+        vm = VirtualMachine.objects.first()
+        vm.config_template = configtemplate
+        vm.save()
+        url = reverse('virtualization:virtualmachine_render-config', kwargs={'pk': vm.pk})
+
+        # User with only view permission should NOT be able to render config
+        self.add_permissions('virtualization.view_virtualmachine')
+        self.assertHttpStatus(self.client.get(url), 403)
+
+        # With render_config permission added should be able to render config
+        self.add_permissions('virtualization.render_config_virtualmachine')
+        self.assertHttpStatus(self.client.get(url), 200)
+
+        # With view permission removed should NOT be able to render config
+        self.remove_permissions('virtualization.view_virtualmachine')
+        self.assertHttpStatus(self.client.get(url), 403)
+
 
 class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
     model = VMInterface
@@ -291,7 +360,7 @@ class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
         site = Site.objects.create(name='Site 1', slug='site-1')
         role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
         clustertype = ClusterType.objects.create(name='Cluster Type 1', slug='cluster-type-1')
-        cluster = Cluster.objects.create(name='Cluster 1', type=clustertype, site=site)
+        cluster = Cluster.objects.create(name='Cluster 1', type=clustertype, scope=site)
         virtualmachines = (
             VirtualMachine(name='Virtual Machine 1', site=site, cluster=cluster, role=role),
             VirtualMachine(name='Virtual Machine 2', site=site, cluster=cluster, role=role),
@@ -327,7 +396,6 @@ class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
             'name': 'Interface X',
             'enabled': False,
             'bridge': interfaces[1].pk,
-            'mac_address': EUI('01-02-03-04-05-06'),
             'mtu': 65000,
             'description': 'New description',
             'mode': InterfaceModeChoices.MODE_TAGGED,
@@ -342,7 +410,6 @@ class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
             'name': 'Interface [4-6]',
             'enabled': False,
             'bridge': interfaces[3].pk,
-            'mac_address': EUI('01-02-03-04-05-06'),
             'mtu': 2000,
             'description': 'New description',
             'mode': InterfaceModeChoices.MODE_TAGGED,
@@ -353,14 +420,23 @@ class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
         }
 
         cls.csv_data = (
-            f"virtual_machine,name,vrf.pk",
-            f"Virtual Machine 2,Interface 4,{vrfs[0].pk}",
-            f"Virtual Machine 2,Interface 5,{vrfs[0].pk}",
-            f"Virtual Machine 2,Interface 6,{vrfs[0].pk}",
+            "virtual_machine,name,vrf.pk,mode,untagged_vlan,tagged_vlans",
+            (
+                f"Virtual Machine 2,Interface 4,{vrfs[0].pk},"
+                f"tagged,{vlans[0].vid},'{','.join([str(v.vid) for v in vlans[1:4]])}'"
+            ),
+            (
+                f"Virtual Machine 2,Interface 5,{vrfs[0].pk},"
+                f"tagged,{vlans[0].vid},'{','.join([str(v.vid) for v in vlans[1:4]])}'"
+            ),
+            (
+                f"Virtual Machine 2,Interface 6,{vrfs[0].pk},"
+                f"tagged,{vlans[0].vid},'{','.join([str(v.vid) for v in vlans[1:4]])}'"
+            ),
         )
 
         cls.csv_update_data = (
-            f"id,name,description",
+            "id,name,description",
             f"{interfaces[0].pk},Interface 7,New description 7",
             f"{interfaces[1].pk},Interface 8,New description 8",
             f"{interfaces[2].pk},Interface 9,New description 9",
@@ -373,4 +449,84 @@ class VMInterfaceTestCase(ViewTestCases.DeviceComponentViewTestCase):
             'mode': InterfaceModeChoices.MODE_TAGGED,
             'untagged_vlan': vlans[0].pk,
             'tagged_vlans': [v.pk for v in vlans[1:4]],
+        }
+
+    def test_bulk_delete_child_interfaces(self):
+        interface1 = VMInterface.objects.get(name='Interface 1')
+        virtual_machine = interface1.virtual_machine
+        self.add_permissions('virtualization.delete_vminterface')
+
+        # Create a child interface
+        child = VMInterface.objects.create(
+            virtual_machine=virtual_machine,
+            name='Interface 1A',
+            parent=interface1
+        )
+        self.assertEqual(virtual_machine.interfaces.count(), 4)
+
+        # Attempt to delete only the parent interface
+        data = {
+            'confirm': True,
+        }
+        self.client.post(self._get_url('delete', interface1), data)
+        self.assertEqual(virtual_machine.interfaces.count(), 4)  # Parent was not deleted
+
+        # Attempt to bulk delete parent & child together
+        data = {
+            'pk': [interface1.pk, child.pk],
+            'confirm': True,
+            '_confirm': True,  # Form button
+        }
+        self.client.post(self._get_url('bulk_delete'), data)
+        self.assertEqual(virtual_machine.interfaces.count(), 2)  # Child & parent were both deleted
+
+
+class VirtualDiskTestCase(ViewTestCases.DeviceComponentViewTestCase):
+    model = VirtualDisk
+    validation_excluded_fields = ('name',)
+
+    @classmethod
+    def setUpTestData(cls):
+        virtualmachine = create_test_virtualmachine('Virtual Machine 1')
+
+        disks = VirtualDisk.objects.bulk_create([
+            VirtualDisk(virtual_machine=virtualmachine, name='Virtual Disk 1', size=10),
+            VirtualDisk(virtual_machine=virtualmachine, name='Virtual Disk 2', size=10),
+            VirtualDisk(virtual_machine=virtualmachine, name='Virtual Disk 3', size=10),
+        ])
+
+        tags = create_tags('Alpha', 'Bravo', 'Charlie')
+
+        cls.form_data = {
+            'virtual_machine': virtualmachine.pk,
+            'name': 'Virtual Disk X',
+            'size': 20,
+            'description': 'New description',
+            'tags': [t.pk for t in tags],
+        }
+
+        cls.bulk_create_data = {
+            'virtual_machine': virtualmachine.pk,
+            'name': 'Virtual Disk [4-6]',
+            'size': 10,
+            'tags': [t.pk for t in tags],
+        }
+
+        cls.csv_data = (
+            "virtual_machine,name,size,description",
+            "Virtual Machine 1,Disk 4,20,Fourth",
+            "Virtual Machine 1,Disk 5,20,Fifth",
+            "Virtual Machine 1,Disk 6,20,Sixth",
+        )
+
+        cls.csv_update_data = (
+            "id,name,size",
+            f"{disks[0].pk},disk1,20",
+            f"{disks[1].pk},disk2,20",
+            f"{disks[2].pk},disk3,20",
+        )
+
+        cls.bulk_edit_data = {
+            'size': 30,
+            'description': 'New description',
         }

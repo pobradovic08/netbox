@@ -1,10 +1,11 @@
+import decimal
+
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import Q, Sum
 from django.db.models.functions import Lower
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from dcim.models import BaseInterface
@@ -13,7 +14,8 @@ from extras.models import ConfigContextModel
 from extras.querysets import ConfigContextModelQuerySet
 from netbox.config import get_config
 from netbox.models import NetBoxModel, PrimaryModel
-from netbox.models.features import ContactsMixin
+from netbox.models.features import ContactsMixin, ImageAttachmentsMixin
+from netbox.models.mixins import OwnerMixin
 from utilities.fields import CounterCacheField, NaturalOrderingField
 from utilities.ordering import naturalize_interface
 from utilities.query_functions import CollateAsChar
@@ -21,12 +23,13 @@ from utilities.tracking import TrackingModelMixin
 from virtualization.choices import *
 
 __all__ = (
-    'VirtualMachine',
     'VMInterface',
+    'VirtualDisk',
+    'VirtualMachine',
 )
 
 
-class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, PrimaryModel):
+class VirtualMachine(ContactsMixin, ImageAttachmentsMixin, RenderConfigMixin, ConfigContextModel, PrimaryModel):
     """
     A virtual machine which runs inside a Cluster.
     """
@@ -67,12 +70,8 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=64
-    )
-    _name = NaturalOrderingField(
-        target_field='name',
-        max_length=100,
-        blank=True
+        max_length=64,
+        db_collation="natural_sort"
     )
     status = models.CharField(
         max_length=50,
@@ -80,11 +79,16 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
         default=VirtualMachineStatusChoices.STATUS_ACTIVE,
         verbose_name=_('status')
     )
+    start_on_boot = models.CharField(
+        max_length=32,
+        choices=VirtualMachineStartOnBootChoices,
+        default=VirtualMachineStartOnBootChoices.STATUS_OFF,
+        verbose_name=_('start on boot'),
+    )
     role = models.ForeignKey(
         to='dcim.DeviceRole',
         on_delete=models.PROTECT,
         related_name='virtual_machines',
-        limit_choices_to={'vm_role': True},
         blank=True,
         null=True
     )
@@ -111,7 +115,7 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
         null=True,
         verbose_name=_('vCPUs'),
         validators=(
-            MinValueValidator(0.01),
+            MinValueValidator(decimal.Decimal(0.01)),
         )
     )
     memory = models.PositiveIntegerField(
@@ -122,12 +126,27 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
     disk = models.PositiveIntegerField(
         blank=True,
         null=True,
-        verbose_name=_('disk (GB)')
+        verbose_name=_('disk (MB)')
+    )
+    serial = models.CharField(
+        verbose_name=_('serial number'),
+        blank=True,
+        max_length=50
+    )
+    services = GenericRelation(
+        to='ipam.Service',
+        content_type_field='parent_object_type',
+        object_id_field='parent_object_id',
+        related_query_name='virtual_machine',
     )
 
     # Counter fields
     interface_count = CounterCacheField(
         to_model='virtualization.VMInterface',
+        to_field='virtual_machine'
+    )
+    virtual_disk_count = CounterCacheField(
+        to_model='virtualization.VirtualDisk',
         to_field='virtual_machine'
     )
 
@@ -141,7 +160,7 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
     )
 
     class Meta:
-        ordering = ('_name', 'pk')  # Name may be non-unique
+        ordering = ('name', 'pk')  # Name may be non-unique
         constraints = (
             models.UniqueConstraint(
                 Lower('name'), 'cluster', 'tenant',
@@ -160,9 +179,6 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
     def __str__(self):
         return self.name
 
-    def get_absolute_url(self):
-        return reverse('virtualization:virtualmachine', args=[self.pk])
-
     def clean(self):
         super().clean()
 
@@ -172,8 +188,8 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
                 'cluster': _('A virtual machine must be assigned to a site and/or cluster.')
             })
 
-        # Validate site for cluster & device
-        if self.cluster and self.site and self.cluster.site != self.site:
+        # Validate site for cluster & VM
+        if self.cluster and self.site and self.cluster._site and self.cluster._site != self.site:
             raise ValidationError({
                 'cluster': _(
                     'The selected cluster ({cluster}) is not assigned to this site ({site}).'
@@ -191,6 +207,19 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
                     "The selected device ({device}) is not assigned to this cluster ({cluster})."
                 ).format(device=self.device, cluster=self.cluster)
             })
+
+        # Validate aggregate disk size
+        if not self._state.adding:
+            total_disk = self.virtualdisks.aggregate(Sum('size', default=0))['size__sum']
+            if total_disk and self.disk is None:
+                self.disk = total_disk
+            elif total_disk and self.disk != total_disk:
+                raise ValidationError({
+                    'disk': _(
+                        "The specified disk size ({size}) must match the aggregate size of assigned virtual disks "
+                        "({total_size})."
+                    ).format(size=self.disk, total_size=total_disk)
+                })
 
         # Validate primary IP addresses
         interfaces = self.interfaces.all() if self.pk else None
@@ -217,34 +246,78 @@ class VirtualMachine(ContactsMixin, RenderConfigMixin, ConfigContextModel, Prima
 
         # Assign site from cluster if not set
         if self.cluster and not self.site:
-            self.site = self.cluster.site
+            self.site = self.cluster._site
 
         super().save(*args, **kwargs)
 
     def get_status_color(self):
         return VirtualMachineStatusChoices.colors.get(self.status)
 
+    def get_start_on_boot_color(self):
+        return VirtualMachineStartOnBootChoices.colors.get(self.start_on_boot)
+
     @property
     def primary_ip(self):
         if get_config().PREFER_IPV4 and self.primary_ip4:
             return self.primary_ip4
-        elif self.primary_ip6:
+        if self.primary_ip6:
             return self.primary_ip6
-        elif self.primary_ip4:
+        if self.primary_ip4:
             return self.primary_ip4
-        else:
-            return None
+        return None
 
 
-class VMInterface(NetBoxModel, BaseInterface, TrackingModelMixin):
+#
+# VM components
+#
+
+
+class ComponentModel(OwnerMixin, NetBoxModel):
+    """
+    An abstract model inherited by any model which has a parent VirtualMachine.
+    """
     virtual_machine = models.ForeignKey(
         to='virtualization.VirtualMachine',
         on_delete=models.CASCADE,
-        related_name='interfaces'
+        related_name='%(class)ss'
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=64
+        max_length=64,
+        db_collation="natural_sort"
+    )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
+    )
+
+    class Meta:
+        abstract = True
+        constraints = (
+            models.UniqueConstraint(
+                fields=('virtual_machine', 'name'),
+                name='%(app_label)s_%(class)s_unique_virtual_machine_name'
+            ),
+        )
+
+    def __str__(self):
+        return self.name
+
+    def to_objectchange(self, action):
+        objectchange = super().to_objectchange(action)
+        objectchange.related_object = self.virtual_machine
+        return objectchange
+
+    @property
+    def parent_object(self):
+        return self.virtual_machine
+
+
+class VMInterface(ComponentModel, BaseInterface, TrackingModelMixin):
+    name = models.CharField(
+        verbose_name=_('name'),
+        max_length=64,
     )
     _name = NaturalOrderingField(
         target_field='name',
@@ -252,24 +325,10 @@ class VMInterface(NetBoxModel, BaseInterface, TrackingModelMixin):
         max_length=100,
         blank=True
     )
-    description = models.CharField(
-        verbose_name=_('description'),
-        max_length=200,
-        blank=True
-    )
-    untagged_vlan = models.ForeignKey(
-        to='ipam.VLAN',
-        on_delete=models.SET_NULL,
-        related_name='vminterfaces_as_untagged',
-        null=True,
-        blank=True,
-        verbose_name=_('untagged VLAN')
-    )
-    tagged_vlans = models.ManyToManyField(
-        to='ipam.VLAN',
-        related_name='vminterfaces_as_tagged',
-        blank=True,
-        verbose_name=_('tagged VLANs')
+    virtual_machine = models.ForeignKey(
+        to='virtualization.VirtualMachine',
+        on_delete=models.CASCADE,
+        related_name='interfaces'  # Override ComponentModel
     )
     ip_addresses = GenericRelation(
         to='ipam.IPAddress',
@@ -291,29 +350,29 @@ class VMInterface(NetBoxModel, BaseInterface, TrackingModelMixin):
         object_id_field='interface_id',
         related_query_name='+'
     )
+    tunnel_terminations = GenericRelation(
+        to='vpn.TunnelTermination',
+        content_type_field='termination_type',
+        object_id_field='termination_id',
+        related_query_name='vminterface',
+    )
     l2vpn_terminations = GenericRelation(
-        to='ipam.L2VPNTermination',
+        to='vpn.L2VPNTermination',
         content_type_field='assigned_object_type',
         object_id_field='assigned_object_id',
         related_query_name='vminterface',
     )
+    mac_addresses = GenericRelation(
+        to='dcim.MACAddress',
+        content_type_field='assigned_object_type',
+        object_id_field='assigned_object_id',
+        related_query_name='vminterface'
+    )
 
-    class Meta:
-        ordering = ('virtual_machine', CollateAsChar('_name'))
-        constraints = (
-            models.UniqueConstraint(
-                fields=('virtual_machine', 'name'),
-                name='%(app_label)s_%(class)s_unique_virtual_machine_name'
-            ),
-        )
+    class Meta(ComponentModel.Meta):
         verbose_name = _('interface')
         verbose_name_plural = _('interfaces')
-
-    def __str__(self):
-        return self.name
-
-    def get_absolute_url(self):
-        return reverse('virtualization:vminterface', kwargs={'pk': self.pk})
+        ordering = ('virtual_machine', CollateAsChar('_name'))
 
     def clean(self):
         super().clean()
@@ -359,15 +418,17 @@ class VMInterface(NetBoxModel, BaseInterface, TrackingModelMixin):
                 ).format(untagged_vlan=self.untagged_vlan)
             })
 
-    def to_objectchange(self, action):
-        objectchange = super().to_objectchange(action)
-        objectchange.related_object = self.virtual_machine
-        return objectchange
-
-    @property
-    def parent_object(self):
-        return self.virtual_machine
-
     @property
     def l2vpn_termination(self):
         return self.l2vpn_terminations.first()
+
+
+class VirtualDisk(ComponentModel, TrackingModelMixin):
+    size = models.PositiveIntegerField(
+        verbose_name=_('size (MB)'),
+    )
+
+    class Meta(ComponentModel.Meta):
+        verbose_name = _('virtual disk')
+        verbose_name_plural = _('virtual disks')
+        ordering = ('virtual_machine', 'name')

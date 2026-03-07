@@ -1,99 +1,21 @@
-from django.test import TestCase
-
 from circuits.models import *
 from dcim.choices import LinkStatusChoices
 from dcim.models import *
 from dcim.svg import CableTraceSVG
-from dcim.utils import object_to_path_node
+from dcim.tests.utils import CablePathTestCase
+from utilities.exceptions import AbortRequest
 
 
-class CablePathTestCase(TestCase):
+class LegacyCablePathTests(CablePathTestCase):
     """
-    Test NetBox's ability to trace and retrace CablePaths in response to data model changes. Tests are numbered
-    as follows:
+    Test NetBox's ability to trace and retrace CablePaths in response to data model changes, without cable profiles.
 
+    Tests are numbered as follows:
         1XX: Test direct connections between different endpoint types
         2XX: Test different cable topologies
         3XX: Test responses to changes in existing objects
         4XX: Test to exclude specific cable topologies
     """
-    @classmethod
-    def setUpTestData(cls):
-
-        # Create a single device that will hold all components
-        cls.site = Site.objects.create(name='Site', slug='site')
-
-        manufacturer = Manufacturer.objects.create(name='Generic', slug='generic')
-        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Test Device')
-        role = DeviceRole.objects.create(name='Device Role', slug='device-role')
-        cls.device = Device.objects.create(site=cls.site, device_type=device_type, role=role, name='Test Device')
-
-        cls.powerpanel = PowerPanel.objects.create(site=cls.site, name='Power Panel')
-
-        provider = Provider.objects.create(name='Provider', slug='provider')
-        circuit_type = CircuitType.objects.create(name='Circuit Type', slug='circuit-type')
-        cls.circuit = Circuit.objects.create(provider=provider, type=circuit_type, cid='Circuit 1')
-
-    def _get_cablepath(self, nodes, **kwargs):
-        """
-        Return a given cable path
-
-        :param nodes: Iterable of steps, with each step being either a single node or a list of nodes
-
-        :return: The matching CablePath (if any)
-        """
-        path = []
-        for step in nodes:
-            if type(step) in (list, tuple):
-                path.append([object_to_path_node(node) for node in step])
-            else:
-                path.append([object_to_path_node(step)])
-        return CablePath.objects.filter(path=path, **kwargs).first()
-
-    def assertPathExists(self, nodes, **kwargs):
-        """
-        Assert that a CablePath from origin to destination with a specific intermediate path exists. Returns the
-        first matching CablePath, if found.
-
-        :param nodes: Iterable of steps, with each step being either a single node or a list of nodes
-        """
-        cablepath = self._get_cablepath(nodes, **kwargs)
-        self.assertIsNotNone(cablepath, msg='CablePath not found')
-
-        return cablepath
-
-    def assertPathDoesNotExist(self, nodes, **kwargs):
-        """
-        Assert that a specific CablePath does *not* exist.
-
-        :param nodes: Iterable of steps, with each step being either a single node or a list of nodes
-        """
-        cablepath = self._get_cablepath(nodes, **kwargs)
-        self.assertIsNone(cablepath, msg='Unexpected CablePath found')
-
-    def assertPathIsSet(self, origin, cablepath, msg=None):
-        """
-        Assert that a specific CablePath instance is set as the path on the origin.
-
-        :param origin: The originating path endpoint
-        :param cablepath: The CablePath instance originating from this endpoint
-        :param msg: Custom failure message (optional)
-        """
-        if msg is None:
-            msg = f"Path #{cablepath.pk} not set on originating endpoint {origin}"
-        self.assertEqual(origin._path_id, cablepath.pk, msg=msg)
-
-    def assertPathIsNotSet(self, origin, msg=None):
-        """
-        Assert that a specific CablePath instance is set as the path on the origin.
-
-        :param origin: The originating path endpoint
-        :param msg: Custom failure message (optional)
-        """
-        if msg is None:
-            msg = f"Path #{origin._path_id} set as origin on {origin}; should be None!"
-        self.assertIsNone(origin._path_id, msg=msg)
-
     def test_101_interface_to_interface(self):
         """
         [IF1] --C1-- [IF2]
@@ -359,9 +281,14 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        PortMapping.objects.create(
+            device=self.device,
+            front_port=frontport1,
+            front_port_position=1,
+            rear_port=rearport1,
+            rear_port_position=1
         )
 
         # Create cable 1
@@ -394,6 +321,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 2
         cable2.delete()
         path1 = self.assertPathExists(
@@ -415,9 +345,14 @@ class CablePathTestCase(TestCase):
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        PortMapping.objects.create(
+            device=self.device,
+            front_port=frontport1,
+            front_port_position=1,
+            rear_port=rearport1,
+            rear_port_position=1
         )
 
         # Create cable 1
@@ -450,6 +385,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 2
         cable2.delete()
         path1 = self.assertPathExists(
@@ -475,18 +413,40 @@ class CablePathTestCase(TestCase):
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
         rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport2_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport2, rear_port_position=1
-        )
-        frontport2_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport2, rear_port_position=2
-        )
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2_1 = FrontPort.objects.create(device=self.device, name='Front Port 2:1')
+        frontport2_2 = FrontPort.objects.create(device=self.device, name='Front Port 2:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_1,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1-2
         cable1 = Cable(
@@ -558,6 +518,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 4)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 3
         cable3.delete()
 
@@ -590,18 +553,40 @@ class CablePathTestCase(TestCase):
         interface8 = Interface.objects.create(device=self.device, name='Interface 8')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
         rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport2_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport2, rear_port_position=1
-        )
-        frontport2_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport2, rear_port_position=2
-        )
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2_1 = FrontPort.objects.create(device=self.device, name='Front Port 2:1')
+        frontport2_2 = FrontPort.objects.create(device=self.device, name='Front Port 2:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_1,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1-2
         cable1 = Cable(
@@ -652,26 +637,69 @@ class CablePathTestCase(TestCase):
         )
         cable5.save()
         path1 = self.assertPathExists(
-            ([interface1, interface2], cable1, frontport1_1, rearport1, cable3, rearport2, frontport2_1, cable4, [interface5, interface6]),
+            (
+                [interface1, interface2],
+                cable1,
+                frontport1_1,
+                rearport1,
+                cable3,
+                rearport2,
+                frontport2_1,
+                cable4,
+                [interface5, interface6],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path2 = self.assertPathExists(
-            ([interface3, interface4], cable2, frontport1_2, rearport1, cable3, rearport2, frontport2_2, cable5, [interface7, interface8]),
+            (
+                [interface3, interface4],
+                cable2,
+                frontport1_2,
+                rearport1,
+                cable3,
+                rearport2,
+                frontport2_2,
+                cable5,
+                [interface7, interface8],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path3 = self.assertPathExists(
-            ([interface5, interface6], cable4, frontport2_1, rearport2, cable3, rearport1, frontport1_1, cable1, [interface1, interface2]),
+            (
+                [interface5, interface6],
+                cable4,
+                frontport2_1,
+                rearport2,
+                cable3,
+                rearport1,
+                frontport1_1,
+                cable1,
+                [interface1, interface2],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path4 = self.assertPathExists(
-            ([interface7, interface8], cable5, frontport2_2, rearport2, cable3, rearport1, frontport1_2, cable2, [interface3, interface4]),
+            (
+                [interface7, interface8],
+                cable5,
+                frontport2_2,
+                rearport2,
+                cable3,
+                rearport1,
+                frontport1_2,
+                cable2,
+                [interface3, interface4],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         self.assertEqual(CablePath.objects.count(), 4)
+
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
 
         # Delete cable 3
         cable3.delete()
@@ -706,27 +734,59 @@ class CablePathTestCase(TestCase):
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=1)
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3')
         rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4:1', rear_port=rearport4, rear_port_position=1
-        )
-        frontport4_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4:2', rear_port=rearport4, rear_port_position=2
-        )
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4_1 = FrontPort.objects.create(device=self.device, name='Front Port 4:1')
+        frontport4_2 = FrontPort.objects.create(device=self.device, name='Front Port 4:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4_1,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4_2,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1-2, 6-7
         cable1 = Cable(
@@ -804,6 +864,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 4)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 3
         cable3.delete()
 
@@ -824,30 +887,72 @@ class CablePathTestCase(TestCase):
         rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
         rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=4)
         rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport2_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport2, rear_port_position=1
-        )
-        frontport2_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport2, rear_port_position=2
-        )
-        frontport3_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3:1', rear_port=rearport3, rear_port_position=1
-        )
-        frontport3_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3:2', rear_port=rearport3, rear_port_position=2
-        )
-        frontport4_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4:1', rear_port=rearport4, rear_port_position=1
-        )
-        frontport4_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4:2', rear_port=rearport4, rear_port_position=2
-        )
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2_1 = FrontPort.objects.create(device=self.device, name='Front Port 2:1')
+        frontport2_2 = FrontPort.objects.create(device=self.device, name='Front Port 2:2')
+        frontport3_1 = FrontPort.objects.create(device=self.device, name='Front Port 3:1')
+        frontport3_2 = FrontPort.objects.create(device=self.device, name='Front Port 3:2')
+        frontport4_1 = FrontPort.objects.create(device=self.device, name='Front Port 4:1')
+        frontport4_2 = FrontPort.objects.create(device=self.device, name='Front Port 4:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_1,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3_1,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3_2,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4_1,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4_2,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1-3, 6-8
         cable1 = Cable(
@@ -931,6 +1036,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 4)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 5
         cable5.delete()
 
@@ -948,23 +1056,50 @@ class CablePathTestCase(TestCase):
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 5', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 5', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport3, rear_port_position=1
-        )
-        frontport3_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport3, rear_port_position=2
-        )
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=4)
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3_1 = FrontPort.objects.create(device=self.device, name='Front Port 3:1')
+        frontport3_2 = FrontPort.objects.create(device=self.device, name='Front Port 3:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3_1,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3_2,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1-2, 5-6
         cable1 = Cable(
@@ -1034,6 +1169,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 4)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 3
         cable3.delete()
 
@@ -1049,13 +1187,25 @@ class CablePathTestCase(TestCase):
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=2)
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+        ])
 
         # Create cables 1
         cable1 = Cable(
@@ -1093,6 +1243,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 3)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 1
         cable1.delete()
 
@@ -1112,10 +1265,11 @@ class CablePathTestCase(TestCase):
         [IF1] --C1-- [FP1] [RP1] --C2-- [RP2]
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        PortMapping.objects.create(
+            front_port=frontport1, front_port_position=1, rear_port=rearport1, rear_port_position=1,
         )
 
         # Create cables
@@ -1135,12 +1289,19 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 1)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
     def test_210_interface_to_circuittermination(self):
         """
         [IF1] --C1-- [CT1]
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
 
         # Create cable 1
         cable1 = Cable(
@@ -1156,6 +1317,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 1)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 1
         cable1.delete()
         self.assertEqual(CablePath.objects.count(), 0)
@@ -1168,7 +1332,11 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
 
         # Create cable 1
         cable1 = Cable(
@@ -1184,7 +1352,11 @@ class CablePathTestCase(TestCase):
         )
 
         # Create CT2
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='Z')
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='Z'
+        )
 
         # Check for partial path to site
         self.assertPathExists(
@@ -1212,6 +1384,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 2
         cable2.delete()
         path1 = self.assertPathExists(
@@ -1233,7 +1408,11 @@ class CablePathTestCase(TestCase):
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
 
         # Create cable 1
         cable1 = Cable(
@@ -1249,7 +1428,11 @@ class CablePathTestCase(TestCase):
         )
 
         # Create CT2
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='Z')
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='Z'
+        )
 
         # Check for partial path to site
         self.assertPathExists(
@@ -1266,16 +1449,33 @@ class CablePathTestCase(TestCase):
 
         # Check for complete path in each direction
         self.assertPathExists(
-            ([interface1, interface2], cable1, circuittermination1, circuittermination2, cable2, [interface3, interface4]),
+            (
+                [interface1, interface2],
+                cable1,
+                circuittermination1,
+                circuittermination2,
+                cable2,
+                [interface3, interface4],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         self.assertPathExists(
-            ([interface3, interface4], cable2, circuittermination2, circuittermination1, cable1, [interface1, interface2]),
+            (
+                [interface3, interface4],
+                cable2,
+                circuittermination2,
+                circuittermination1,
+                cable1,
+                [interface1, interface2],
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         self.assertEqual(CablePath.objects.count(), 2)
+
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
 
         # Delete cable 2
         cable2.delete()
@@ -1299,8 +1499,16 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         site2 = Site.objects.create(name='Site 2', slug='site-2')
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, site=site2, term_side='Z')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=site2,
+            term_side='Z'
+        )
 
         # Create cable 1
         cable1 = Cable(
@@ -1314,6 +1522,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 1)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 1
         cable1.delete()
         self.assertEqual(CablePath.objects.count(), 0)
@@ -1326,8 +1537,16 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         providernetwork = ProviderNetwork.objects.create(name='Provider Network 1', provider=self.circuit.provider)
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, provider_network=providernetwork, term_side='Z')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=providernetwork,
+            term_side='Z'
+        )
 
         # Create cable 1
         cable1 = Cable(
@@ -1341,6 +1560,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 1)
         self.assertTrue(CablePath.objects.first().is_complete)
+
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
 
         # Delete cable 1
         cable1.delete()
@@ -1359,20 +1581,49 @@ class CablePathTestCase(TestCase):
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
         rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport2_1 = FrontPort.objects.create(device=self.device, name='Front Port 2:1')
+        frontport2_2 = FrontPort.objects.create(device=self.device, name='Front Port 2:2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_1,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=2,
+            ),
+        ])
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
         )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site, term_side='Z'
         )
-        frontport2_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport2, rear_port_position=1
-        )
-        frontport2_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport2, rear_port_position=2
-        )
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='Z')
 
         # Create cables
         cable1 = Cable(
@@ -1439,6 +1690,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 4)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cables 3-4
         cable3.delete()
         cable4.delete()
@@ -1454,10 +1708,26 @@ class CablePathTestCase(TestCase):
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         circuit2 = Circuit.objects.create(provider=self.circuit.provider, type=self.circuit.type, cid='Circuit 2')
-        circuittermination1 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='A')
-        circuittermination2 = CircuitTermination.objects.create(circuit=self.circuit, site=self.site, term_side='Z')
-        circuittermination3 = CircuitTermination.objects.create(circuit=circuit2, site=self.site, term_side='A')
-        circuittermination4 = CircuitTermination.objects.create(circuit=circuit2, site=self.site, term_side='Z')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='Z'
+        )
+        circuittermination3 = CircuitTermination.objects.create(
+            circuit=circuit2,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination4 = CircuitTermination.objects.create(
+            circuit=circuit2,
+            termination=self.site,
+            term_side='Z'
+        )
 
         # Create cables
         cable1 = Cable(
@@ -1495,6 +1765,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 2
         cable2.delete()
         path1 = self.assertPathExists(
@@ -1518,22 +1791,44 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=1)
-        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4', rear_port=rearport4, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3')
+        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4 = FrontPort.objects.create(device=self.device, name='Front Port 4')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+        ])
 
         # Create cables 1-2
         cable1 = Cable(
@@ -1578,6 +1873,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
         # Delete cable 2
         cable2.delete()
 
@@ -1602,30 +1900,72 @@ class CablePathTestCase(TestCase):
         interface4 = Interface.objects.create(device=self.device, name='Interface 4')
         rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=4)
         rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=4)
-        frontport1_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport1_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:2', rear_port=rearport1, rear_port_position=2
-        )
-        frontport1_3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:3', rear_port=rearport1, rear_port_position=3
-        )
-        frontport1_4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1:4', rear_port=rearport1, rear_port_position=4
-        )
-        frontport2_1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:1', rear_port=rearport2, rear_port_position=1
-        )
-        frontport2_2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:2', rear_port=rearport2, rear_port_position=2
-        )
-        frontport2_3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:3', rear_port=rearport2, rear_port_position=3
-        )
-        frontport2_4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2:4', rear_port=rearport2, rear_port_position=4
-        )
+        frontport1_1 = FrontPort.objects.create(device=self.device, name='Front Port 1:1')
+        frontport1_2 = FrontPort.objects.create(device=self.device, name='Front Port 1:2')
+        frontport1_3 = FrontPort.objects.create(device=self.device, name='Front Port 1:3')
+        frontport1_4 = FrontPort.objects.create(device=self.device, name='Front Port 1:4')
+        frontport2_1 = FrontPort.objects.create(device=self.device, name='Front Port 2:1')
+        frontport2_2 = FrontPort.objects.create(device=self.device, name='Front Port 2:2')
+        frontport2_3 = FrontPort.objects.create(device=self.device, name='Front Port 2:3')
+        frontport2_4 = FrontPort.objects.create(device=self.device, name='Front Port 2:4')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_2,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_3,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=3,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport1_4,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=4,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_1,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=2,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_3,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=3,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2_4,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=4,
+            ),
+        ])
 
         # Create cables 1-2
         cable1 = Cable(
@@ -1655,47 +1995,100 @@ class CablePathTestCase(TestCase):
         )
         cable3.save()
         self.assertPathExists(
-            (interface1, cable1, (frontport1_1, frontport1_2), rearport1, cable3, rearport2, (frontport2_1, frontport2_2)),
-            is_complete=False
+            (
+                interface1,
+                cable1,
+                (frontport1_1, frontport1_2),
+                rearport1,
+                cable3,
+                rearport2,
+                (frontport2_1, frontport2_2),
+            ),
+            is_complete=False,
         )
         self.assertPathExists(
-            (interface2, cable2, (frontport1_3, frontport1_4), rearport1, cable3, rearport2, (frontport2_3, frontport2_4)),
-            is_complete=False
+            (
+                interface2,
+                cable2,
+                (frontport1_3, frontport1_4),
+                rearport1,
+                cable3,
+                rearport2,
+                (frontport2_3, frontport2_4),
+            ),
+            is_complete=False,
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
         # Create cables 4-5
-        cable4 = Cable(
-            a_terminations=[frontport2_1, frontport2_2],
-            b_terminations=[interface3]
-        )
+        cable4 = Cable(a_terminations=[frontport2_1, frontport2_2], b_terminations=[interface3])
         cable4.save()
-        cable5 = Cable(
-            a_terminations=[frontport2_3, frontport2_4],
-            b_terminations=[interface4]
-        )
+        cable5 = Cable(a_terminations=[frontport2_3, frontport2_4], b_terminations=[interface4])
         cable5.save()
         path1 = self.assertPathExists(
-            (interface1, cable1, (frontport1_1, frontport1_2), rearport1, cable3, rearport2, (frontport2_1, frontport2_2), cable4, interface3),
+            (
+                interface1,
+                cable1,
+                (frontport1_1, frontport1_2),
+                rearport1,
+                cable3,
+                rearport2,
+                (frontport2_1, frontport2_2),
+                cable4,
+                interface3,
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path2 = self.assertPathExists(
-            (interface2, cable2, (frontport1_3, frontport1_4), rearport1, cable3, rearport2, (frontport2_3, frontport2_4), cable5, interface4),
+            (
+                interface2,
+                cable2,
+                (frontport1_3, frontport1_4),
+                rearport1,
+                cable3,
+                rearport2,
+                (frontport2_3, frontport2_4),
+                cable5,
+                interface4,
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path3 = self.assertPathExists(
-            (interface3, cable4, (frontport2_1, frontport2_2), rearport2, cable3, rearport1, (frontport1_1, frontport1_2), cable1, interface1),
+            (
+                interface3,
+                cable4,
+                (frontport2_1, frontport2_2),
+                rearport2,
+                cable3,
+                rearport1,
+                (frontport1_1, frontport1_2),
+                cable1,
+                interface1,
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         path4 = self.assertPathExists(
-            (interface4, cable5, (frontport2_3, frontport2_4), rearport2, cable3, rearport1, (frontport1_3, frontport1_4), cable2, interface2),
+            (
+                interface4,
+                cable5,
+                (frontport2_3, frontport2_4),
+                rearport2,
+                cable3,
+                rearport1,
+                (frontport1_3, frontport1_4),
+                cable2,
+                interface2,
+            ),
             is_complete=True,
-            is_active=True
+            is_active=True,
         )
         self.assertEqual(CablePath.objects.count(), 4)
+
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
 
         # Delete cable 3
         cable3.delete()
@@ -1719,22 +2112,44 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=1)
-        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4', rear_port=rearport4, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3')
+        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4 = FrontPort.objects.create(device=self.device, name='Front Port 4')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+        ])
 
         cable2 = Cable(
             a_terminations=[rearport1],
@@ -1755,7 +2170,10 @@ class CablePathTestCase(TestCase):
         )
         cable1.save()
         self.assertPathExists(
-            (interface1, cable1, (frontport1, frontport3), (rearport1, rearport3), (cable2, cable4), (rearport2, rearport4), (frontport2, frontport4)),
+            (
+                interface1, cable1, (frontport1, frontport3), (rearport1, rearport3), (cable2, cable4),
+                (rearport2, rearport4), (frontport2, frontport4)
+            ),
             is_complete=False
         )
         self.assertEqual(CablePath.objects.count(), 1)
@@ -1784,6 +2202,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 2)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
     def test_220_interface_to_interface_duplex_via_multiple_front_and_rear_ports(self):
         """
         [IF1] --C1-- [FP1] [RP1] --C2-- [RP2] [FP2] --C3-- [IF2]
@@ -1792,22 +2213,44 @@ class CablePathTestCase(TestCase):
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=1)
-        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4', rear_port=rearport4, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3')
+        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4 = FrontPort.objects.create(device=self.device, name='Front Port 4')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+        ])
 
         cable2 = Cable(
             a_terminations=[rearport1],
@@ -1877,6 +2320,9 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 3)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
     def test_221_non_symmetric_paths(self):
         """
         [IF1] --C1-- [FP1] [RP1] --C2-- [RP2] [FP2] --C3-- -------------------------------------- [IF2]
@@ -1885,30 +2331,62 @@ class CablePathTestCase(TestCase):
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3', positions=1)
-        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4', positions=1)
-        rearport5 = RearPort.objects.create(device=self.device, name='Rear Port 5', positions=1)
-        rearport6 = RearPort.objects.create(device=self.device, name='Rear Port 6', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=self.device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4 = FrontPort.objects.create(
-            device=self.device, name='Front Port 4', rear_port=rearport4, rear_port_position=1
-        )
-        frontport5 = FrontPort.objects.create(
-            device=self.device, name='Front Port 5', rear_port=rearport5, rear_port_position=1
-        )
-        frontport6 = FrontPort.objects.create(
-            device=self.device, name='Front Port 6', rear_port=rearport6, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=self.device, name='Rear Port 3')
+        rearport4 = RearPort.objects.create(device=self.device, name='Rear Port 4')
+        rearport5 = RearPort.objects.create(device=self.device, name='Rear Port 5')
+        rearport6 = RearPort.objects.create(device=self.device, name='Rear Port 6')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4 = FrontPort.objects.create(device=self.device, name='Front Port 4')
+        frontport5 = FrontPort.objects.create(device=self.device, name='Front Port 5')
+        frontport6 = FrontPort.objects.create(device=self.device, name='Front Port 6')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport5,
+                front_port_position=1,
+                rear_port=rearport5,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport6,
+                front_port_position=1,
+                rear_port=rearport6,
+                rear_port_position=1,
+            ),
+        ])
 
         cable2 = Cable(
             a_terminations=[rearport1],
@@ -1997,20 +2475,225 @@ class CablePathTestCase(TestCase):
         )
         self.assertEqual(CablePath.objects.count(), 3)
 
+        # Test SVG generation
+        CableTraceSVG(interface1).render()
+
+    def test_222_single_path_via_multiple_singleposition_rear_ports(self):
+        """
+        [IF1] --C1-- [FP1] [RP1] --C2-- [IF2]
+                     [FP2] [RP2]
+        """
+        interface1 = Interface.objects.create(device=self.device, name='Interface 1')
+        interface2 = Interface.objects.create(device=self.device, name='Interface 2')
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+        ])
+
+        cable1 = Cable(
+            a_terminations=[interface1],
+            b_terminations=[frontport1, frontport2]
+        )
+        cable1.save()
+        self.assertEqual(CablePath.objects.count(), 1)
+
+        cable2 = Cable(
+            a_terminations=[rearport1, rearport2],
+            b_terminations=[interface2]
+        )
+        cable2.save()
+        self.assertEqual(CablePath.objects.count(), 2)
+
+        self.assertPathExists(
+            (interface1, cable1, (frontport1, frontport2), (rearport1, rearport2), cable2, interface2),
+            is_complete=True
+        )
+        self.assertPathExists(
+            (interface2, cable2, (rearport1, rearport2), (frontport1, frontport2), cable1, interface1),
+            is_complete=True
+        )
+
+        # Test SVG generation both directions
+        CableTraceSVG(interface1).render()
+        CableTraceSVG(interface2).render()
+
+    def test_223_interface_to_interface_via_multiple_circuit_terminations(self):
+        provider = Provider.objects.first()
+        circuit_type = CircuitType.objects.first()
+        circuit1 = self.circuit
+        circuit2 = Circuit.objects.create(provider=provider, type=circuit_type, cid='Circuit 2')
+        interface1 = Interface.objects.create(device=self.device, name='Interface 1')
+        interface2 = Interface.objects.create(device=self.device, name='Interface 2')
+        circuittermination1_A = CircuitTermination.objects.create(
+            circuit=circuit1,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination1_Z = CircuitTermination.objects.create(
+            circuit=circuit1,
+            termination=self.site,
+            term_side='Z'
+        )
+        circuittermination2_A = CircuitTermination.objects.create(
+            circuit=circuit2,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination2_Z = CircuitTermination.objects.create(
+            circuit=circuit2,
+            termination=self.site,
+            term_side='Z'
+        )
+
+        # Create cables
+        cable1 = Cable(
+            a_terminations=[interface1],
+            b_terminations=[circuittermination1_A, circuittermination2_A]
+        )
+        cable2 = Cable(
+            a_terminations=[interface2],
+            b_terminations=[circuittermination1_Z, circuittermination2_Z]
+        )
+        cable1.save()
+        cable2.save()
+
+        self.assertEqual(CablePath.objects.count(), 2)
+
+        path1 = self.assertPathExists(
+            (
+                interface1,
+                cable1,
+                (circuittermination1_A, circuittermination2_A),
+                (circuittermination1_Z, circuittermination2_Z),
+                cable2,
+                interface2
+
+            ),
+            is_active=True,
+            is_complete=True,
+        )
+        interface1.refresh_from_db()
+        self.assertPathIsSet(interface1, path1)
+
+        path2 = self.assertPathExists(
+            (
+                interface2,
+                cable2,
+                (circuittermination1_Z, circuittermination2_Z),
+                (circuittermination1_A, circuittermination2_A),
+                cable1,
+                interface1
+
+            ),
+            is_active=True,
+            is_complete=True,
+        )
+        interface2.refresh_from_db()
+        self.assertPathIsSet(interface2, path2)
+
+    def test_224_single_path_via_multiple_pass_throughs_with_breakouts(self):
+        """
+        [IF1] --C1-- [FP1] [RP1] --C2-- [IF3]
+        [IF2]        [FP2] [RP2]        [IF4]
+        """
+        interface1 = Interface.objects.create(device=self.device, name='Interface 1')
+        interface2 = Interface.objects.create(device=self.device, name='Interface 2')
+        interface3 = Interface.objects.create(device=self.device, name='Interface 3')
+        interface4 = Interface.objects.create(device=self.device, name='Interface 4')
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+        ])
+
+        # Create cables
+        cable1 = Cable(
+            a_terminations=[interface1, interface2],
+            b_terminations=[frontport1, frontport2]
+        )
+        cable1.save()
+        cable2 = Cable(
+            a_terminations=[rearport1, rearport2],
+            b_terminations=[interface3, interface4]
+        )
+        cable2.save()
+
+        # Validate paths
+        self.assertPathExists(
+            (
+                [interface1, interface2], cable1, [frontport1, frontport2],
+                [rearport1, rearport2], cable2, [interface3, interface4],
+            ),
+            is_complete=True,
+            is_active=True
+        )
+        self.assertPathExists(
+            (
+                [interface3, interface4], cable2, [rearport1, rearport2],
+                [frontport1, frontport2], cable1, [interface1, interface2],
+            ),
+            is_complete=True,
+            is_active=True
+        )
+        self.assertEqual(CablePath.objects.count(), 2)
+
     def test_301_create_path_via_existing_cable(self):
         """
         [IF1] --C1-- [FP1] [RP1] --C2-- [RP2] [FP2] --C3-- [IF2]
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+        ])
 
         # Create cable 2
         cable2 = Cable(
@@ -2056,10 +2739,17 @@ class CablePathTestCase(TestCase):
         """
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+        ])
 
         # Create cables 1 and 2
         cable1 = Cable(
@@ -2116,7 +2806,6 @@ class CablePathTestCase(TestCase):
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
         interface3 = Interface.objects.create(device=self.device, name='Interface 3')
 
-        # Create cables 1
         cable1 = Cable(
             a_terminations=[interface1],
             b_terminations=[interface2, interface3]
@@ -2148,6 +2837,10 @@ class CablePathTestCase(TestCase):
             is_active=True
         )
 
+        # Verify _path is cleared on removed interface (#21127)
+        interface3.refresh_from_db()
+        self.assertPathIsNotSet(interface3)
+
     def test_401_exclude_midspan_devices(self):
         """
         [IF1] --C1-- [FP1][Test Device][RP1] --C2-- [RP2][Test Device][FP2] --C3-- [IF2]
@@ -2156,27 +2849,49 @@ class CablePathTestCase(TestCase):
         device = Device.objects.create(
             site=self.site,
             device_type=self.device.device_type,
-            device_role=self.device.device_role,
+            role=self.device.role,
             name='Test mid-span Device'
         )
         interface1 = Interface.objects.create(device=self.device, name='Interface 1')
         interface2 = Interface.objects.create(device=self.device, name='Interface 2')
-        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1', positions=1)
-        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2', positions=1)
-        rearport3 = RearPort.objects.create(device=device, name='Rear Port 3', positions=1)
-        rearport4 = RearPort.objects.create(device=device, name='Rear Port 4', positions=1)
-        frontport1 = FrontPort.objects.create(
-            device=self.device, name='Front Port 1', rear_port=rearport1, rear_port_position=1
-        )
-        frontport2 = FrontPort.objects.create(
-            device=self.device, name='Front Port 2', rear_port=rearport2, rear_port_position=1
-        )
-        frontport3 = FrontPort.objects.create(
-            device=device, name='Front Port 3', rear_port=rearport3, rear_port_position=1
-        )
-        frontport4 = FrontPort.objects.create(
-            device=device, name='Front Port 4', rear_port=rearport4, rear_port_position=1
-        )
+        rearport1 = RearPort.objects.create(device=self.device, name='Rear Port 1')
+        rearport2 = RearPort.objects.create(device=self.device, name='Rear Port 2')
+        rearport3 = RearPort.objects.create(device=device, name='Rear Port 3')
+        rearport4 = RearPort.objects.create(device=device, name='Rear Port 4')
+        frontport1 = FrontPort.objects.create(device=self.device, name='Front Port 1')
+        frontport2 = FrontPort.objects.create(device=self.device, name='Front Port 2')
+        frontport3 = FrontPort.objects.create(device=self.device, name='Front Port 3')
+        frontport4 = FrontPort.objects.create(device=self.device, name='Front Port 4')
+        PortMapping.objects.bulk_create([
+            PortMapping(
+                device=self.device,
+                front_port=frontport1,
+                front_port_position=1,
+                rear_port=rearport1,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport2,
+                front_port_position=1,
+                rear_port=rearport2,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport3,
+                front_port_position=1,
+                rear_port=rearport3,
+                rear_port_position=1,
+            ),
+            PortMapping(
+                device=self.device,
+                front_port=frontport4,
+                front_port_position=1,
+                rear_port=rearport4,
+                rear_port_position=1,
+            ),
+        ])
 
         cable2 = Cable(
             a_terminations=[rearport1],
@@ -2198,7 +2913,7 @@ class CablePathTestCase(TestCase):
             b_terminations=[frontport1, frontport3],
             label='C1'
         )
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(AbortRequest):
             cable1.save()
 
         self.assertPathDoesNotExist(
@@ -2217,7 +2932,7 @@ class CablePathTestCase(TestCase):
             label='C3'
         )
 
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(AbortRequest):
             cable3.save()
 
         self.assertPathDoesNotExist(
@@ -2237,3 +2952,33 @@ class CablePathTestCase(TestCase):
             is_active=True
         )
         self.assertEqual(CablePath.objects.count(), 0)
+
+    def test_402_exclude_circuit_loopback(self):
+        interface = Interface.objects.create(device=self.device, name='Interface 1')
+        circuittermination1 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='A'
+        )
+        circuittermination2 = CircuitTermination.objects.create(
+            circuit=self.circuit,
+            termination=self.site,
+            term_side='Z'
+        )
+
+        # Create cables
+        cable = Cable(
+            a_terminations=[interface],
+            b_terminations=[circuittermination1, circuittermination2]
+        )
+        cable.save()
+
+        path = self.assertPathExists(
+            (interface, cable, (circuittermination1, circuittermination2)),
+            is_active=True,
+            is_complete=False,
+            is_split=True
+        )
+        self.assertEqual(CablePath.objects.count(), 1)
+        interface.refresh_from_db()
+        self.assertPathIsSet(interface, path)

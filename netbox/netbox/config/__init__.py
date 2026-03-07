@@ -4,14 +4,15 @@ import threading
 from django.conf import settings
 from django.core.cache import cache
 from django.db.utils import DatabaseError
+from django.utils.translation import gettext_lazy as _
 
 from .parameters import PARAMS
 
 __all__ = (
-    'clear_config',
-    'ConfigItem',
-    'get_config',
     'PARAMS',
+    'ConfigItem',
+    'clear_config',
+    'get_config',
 )
 
 _thread_locals = threading.local()
@@ -63,7 +64,7 @@ class Config:
         if item in self.defaults:
             return self.defaults[item]
 
-        raise AttributeError(f"Invalid configuration parameter: {item}")
+        raise AttributeError(_("Invalid configuration parameter: {item}").format(item=item))
 
     def _populate_from_cache(self):
         """Populate config data from Redis cache"""
@@ -74,22 +75,26 @@ class Config:
 
     def _populate_from_db(self):
         """Cache data from latest ConfigRevision, then populate from cache"""
-        from extras.models import ConfigRevision
+        from core.models import ConfigRevision
 
         try:
-            revision = ConfigRevision.objects.last()
+            # Enforce the creation date as the ordering parameter
+            revision = ConfigRevision.objects.get(active=True)
+            logger.debug(f"Loaded active configuration revision (#{revision.pk})")
+        except (ConfigRevision.DoesNotExist, ConfigRevision.MultipleObjectsReturned):
+            revision = ConfigRevision.objects.order_by('-created').first()
             if revision is None:
-                logger.debug("No previous configuration found in database; proceeding with default values")
+                logger.debug("No configuration found in database; proceeding with default values")
                 return
-            logger.debug("Loaded configuration data from database")
+            logger.debug(f"No active configuration revision found; falling back to most recent (#{revision.pk})")
         except DatabaseError:
             # The database may not be available yet (e.g. when running a management command)
-            logger.warning(f"Skipping config initialization (database unavailable)")
+            logger.warning("Skipping config initialization (database unavailable)")
             return
 
-        revision.activate()
-        logger.debug("Filled cache with data from latest ConfigRevision")
+        revision.activate(update_db=False)
         self._populate_from_cache()
+        logger.debug("Filled cache with data from latest ConfigRevision")
 
 
 class ConfigItem:

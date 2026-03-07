@@ -15,7 +15,7 @@ Some configuration parameters may alternatively be defined either in `configurat
 
 ## Dynamic Configuration Parameters
 
-Some configuration parameters are primarily controlled via NetBox's admin interface (under Admin > Extras > Configuration Revisions). These are noted where applicable in the documentation. These settings may also be overridden in `configuration.py` to prevent them from being modified via the UI. A complete list of supported parameters is provided below:
+Some configuration parameters are primarily controlled via NetBox's admin interface (under Admin > System > Configuration History). These are noted where applicable in the documentation. These settings may also be overridden in `configuration.py` to prevent them from being modified via the UI. A complete list of supported parameters is provided below:
 
 * [`ALLOWED_URL_SCHEMES`](./security.md#allowed_url_schemes)
 * [`BANNER_BOTTOM`](./miscellaneous.md#banner_bottom)
@@ -25,7 +25,7 @@ Some configuration parameters are primarily controlled via NetBox's admin interf
 * [`CUSTOM_VALIDATORS`](./data-validation.md#custom_validators)
 * [`DEFAULT_USER_PREFERENCES`](./default-values.md#default_user_preferences)
 * [`ENFORCE_GLOBAL_UNIQUE`](./miscellaneous.md#enforce_global_unique)
-* [`GRAPHQL_ENABLED`](./miscellaneous.md#graphql_enabled)
+* [`GRAPHQL_ENABLED`](./graphql-api.md#graphql_enabled)
 * [`JOB_RETENTION`](./miscellaneous.md#job_retention)
 * [`MAINTENANCE_MODE`](./miscellaneous.md#maintenance_mode)
 * [`MAPS_URL`](./miscellaneous.md#maps_url)
@@ -35,6 +35,7 @@ Some configuration parameters are primarily controlled via NetBox's admin interf
 * [`POWERFEED_DEFAULT_MAX_UTILIZATION`](./default-values.md#powerfeed_default_max_utilization)
 * [`POWERFEED_DEFAULT_VOLTAGE`](./default-values.md#powerfeed_default_voltage)
 * [`PREFER_IPV4`](./miscellaneous.md#prefer_ipv4)
+* [`PROTECTION_RULES`](./data-validation.md#protection_rules)
 * [`RACK_ELEVATION_DEFAULT_UNIT_HEIGHT`](./default-values.md#rack_elevation_default_unit_height)
 * [`RACK_ELEVATION_DEFAULT_UNIT_WIDTH`](./default-values.md#rack_elevation_default_unit_width)
 
@@ -46,4 +47,4 @@ The configuration file may be modified at any time. However, the WSGI service (e
 $ sudo systemctl restart netbox
 ```
 
-Configuration parameters which are set via the admin UI (those listed under "dynamic settings") take effect immediately.
+Dynamic configuration parameters (those which can be modified via the UI) take effect immediately.

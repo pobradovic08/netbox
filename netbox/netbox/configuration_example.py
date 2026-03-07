@@ -12,14 +12,16 @@ ALLOWED_HOSTS = []
 
 # PostgreSQL database configuration. See the Django documentation for a complete list of available parameters:
 #   https://docs.djangoproject.com/en/stable/ref/settings/#databases
-DATABASE = {
-    'ENGINE': 'django.db.backends.postgresql',  # Database engine
-    'NAME': 'netbox',         # Database name
-    'USER': '',               # PostgreSQL username
-    'PASSWORD': '',           # PostgreSQL password
-    'HOST': 'localhost',      # Database server
-    'PORT': '',               # Database port (leave blank for default)
-    'CONN_MAX_AGE': 300,      # Max database connection age
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',  # Database engine
+        'NAME': 'netbox',         # Database name
+        'USER': '',               # PostgreSQL username
+        'PASSWORD': '',           # PostgreSQL password
+        'HOST': 'localhost',      # Database server
+        'PORT': '',               # Database port (leave blank for default)
+        'CONN_MAX_AGE': 300,      # Max database connection age
+    }
 }
 
 # Redis database settings. Redis is used for caching and for queuing background tasks such as webhook events. A separate
@@ -66,6 +68,16 @@ REDIS = {
 # https://docs.djangoproject.com/en/stable/ref/settings/#std:setting-SECRET_KEY
 SECRET_KEY = ''
 
+# Define a mapping of cryptographic peppers to use when hashing API tokens. A minimum of one pepper is required to
+# enable v2 API tokens (NetBox v4.5+). Define peppers as a mapping of numeric ID to pepper value, as shown below. Each
+# pepper must be at least 50 characters in length.
+#
+#     API_TOKEN_PEPPERS = {
+#         1: "<random string>",
+#         2: "<random string>",
+#     }
+API_TOKEN_PEPPERS = {}
+
 
 #########################
 #                       #
@@ -78,9 +90,6 @@ SECRET_KEY = ''
 ADMINS = [
     # ('John Doe', 'jdoe@example.com'),
 ]
-
-# Permit the retrieval of API tokens after their creation.
-ALLOW_TOKEN_RETRIEVAL = False
 
 # Enable any desired validators for local account passwords below. For a list of included validators, please see the
 # Django documentation at https://docs.djangoproject.com/en/stable/topics/auth/passwords/#password-validation.
@@ -131,9 +140,6 @@ EMAIL = {
     'FROM_EMAIL': '',
 }
 
-# Localization
-ENABLE_LOCALIZATION = False
-
 # Exempt certain models from the enforcement of view permissions. Models listed here will be viewable by all users and
 # by anonymous users. List models in the form `<app>.<model>`. Add '*' to this list to exempt all models.
 EXEMPT_VIEW_PERMISSIONS = [
@@ -160,13 +166,15 @@ LOGGING = {}
 # authenticated to NetBox indefinitely.
 LOGIN_PERSISTENCE = False
 
-# Setting this to True will permit only authenticated users to access any part of NetBox. By default, anonymous users
-# are permitted to access most data in NetBox but not make any changes.
-LOGIN_REQUIRED = False
+# Setting this to False will permit unauthenticated users to access most areas of NetBox (but not make any changes).
+LOGIN_REQUIRED = True
 
 # The length of time (in seconds) for which a user will remain logged into the web UI before being prompted to
 # re-authenticate. (Default: 1209600 [14 days])
 LOGIN_TIMEOUT = None
+
+# Hide the login form. Useful when only allowing SSO authentication.
+LOGIN_FORM_HIDDEN = False
 
 # The view name or URL to which users are redirected after logging out.
 LOGOUT_REDIRECT_URL = 'home'
@@ -225,24 +233,28 @@ SESSION_COOKIE_NAME = 'sessionid'
 # database access.) Note that the user as which NetBox runs must have read and write permissions to this path.
 SESSION_FILE_PATH = None
 
-# By default, uploaded media is stored on the local filesystem. Using Django-storages is also supported. Provide the
-# class path of the storage driver in STORAGE_BACKEND and any configuration options in STORAGE_CONFIG. For example:
-# STORAGE_BACKEND = 'storages.backends.s3boto3.S3Boto3Storage'
-# STORAGE_CONFIG = {
-#     'AWS_ACCESS_KEY_ID': 'Key ID',
-#     'AWS_SECRET_ACCESS_KEY': 'Secret',
-#     'AWS_STORAGE_BUCKET_NAME': 'netbox',
-#     'AWS_S3_REGION_NAME': 'eu-west-1',
+# By default the memory and disk sizes are displayed using base 10 (e.g. 1000 MB = 1 GB).
+# If you would like to use base 2 (e.g. 1024 MB = 1 GB) set this to 1024.
+# DISK_BASE_UNIT = 1024
+# RAM_BASE_UNIT = 1024
+
+# Within the STORAGES dictionary, "default" is used for image uploads, "staticfiles" is for static files and "scripts"
+# is used for custom scripts. See django-storages and django-storage-swift libraries for more details. By default the
+# following configuration is used:
+# STORAGES = {
+#     "default": {
+#         "BACKEND": "django.core.files.storage.FileSystemStorage",
+#     },
+#     "staticfiles": {
+#         "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+#     },
+#     "scripts": {
+#         "BACKEND": "extras.storage.ScriptFileSystemStorage",
+#         "OPTIONS": {
+#             "allow_overwrite": True,
+#         },
+#     },
 # }
 
 # Time zone (default: UTC)
 TIME_ZONE = 'UTC'
-
-# Date/time formatting. See the following link for supported formats:
-# https://docs.djangoproject.com/en/stable/ref/templates/builtins/#date
-DATE_FORMAT = 'N j, Y'
-SHORT_DATE_FORMAT = 'Y-m-d'
-TIME_FORMAT = 'g:i a'
-SHORT_TIME_FORMAT = 'H:i:s'
-DATETIME_FORMAT = 'N j, Y g:i a'
-SHORT_DATETIME_FORMAT = 'Y-m-d H:i'

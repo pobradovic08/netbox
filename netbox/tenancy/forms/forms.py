@@ -1,13 +1,14 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from tenancy.models import *
 from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField
+
+from ..models import *
 
 __all__ = (
     'ContactModelFilterForm',
-    'TenancyForm',
     'TenancyFilterForm',
+    'TenancyForm',
 )
 
 
@@ -25,6 +26,7 @@ class TenancyForm(forms.Form):
         label=_('Tenant'),
         queryset=Tenant.objects.all(),
         required=False,
+        quick_add=True,
         query_params={
             'group_id': '$tenant_group'
         }

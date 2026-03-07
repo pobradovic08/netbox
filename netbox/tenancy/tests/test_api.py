@@ -18,9 +18,10 @@ class AppTest(APITestCase):
 
 class TenantGroupTest(APIViewTestCases.APIViewTestCase):
     model = TenantGroup
-    brief_fields = ['_depth', 'display', 'id', 'name', 'slug', 'tenant_count', 'url']
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'slug', 'tenant_count', 'url']
     bulk_update_data = {
         'description': 'New description',
+        'comments': 'New Comment',
     }
 
     @classmethod
@@ -28,12 +29,17 @@ class TenantGroupTest(APIViewTestCases.APIViewTestCase):
 
         parent_tenant_groups = (
             TenantGroup.objects.create(name='Parent Tenant Group 1', slug='parent-tenant-group-1'),
-            TenantGroup.objects.create(name='Parent Tenant Group 2', slug='parent-tenant-group-2'),
+            TenantGroup.objects.create(
+                name='Parent Tenant Group 2', slug='parent-tenant-group-2', comments='Parent Group 2 comment',
+            ),
         )
 
         TenantGroup.objects.create(name='Tenant Group 1', slug='tenant-group-1', parent=parent_tenant_groups[0])
         TenantGroup.objects.create(name='Tenant Group 2', slug='tenant-group-2', parent=parent_tenant_groups[0])
-        TenantGroup.objects.create(name='Tenant Group 3', slug='tenant-group-3', parent=parent_tenant_groups[0])
+        TenantGroup.objects.create(
+            name='Tenant Group 3', slug='tenant-group-3', parent=parent_tenant_groups[0],
+            comments='Tenant Group 3 comment'
+        )
 
         cls.create_data = [
             {
@@ -50,13 +56,14 @@ class TenantGroupTest(APIViewTestCases.APIViewTestCase):
                 'name': 'Tenant Group 6',
                 'slug': 'tenant-group-6',
                 'parent': parent_tenant_groups[1].pk,
+                'comments': 'Tenant Group 6 comment',
             },
         ]
 
 
 class TenantTest(APIViewTestCases.APIViewTestCase):
     model = Tenant
-    brief_fields = ['display', 'id', 'name', 'slug', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'slug', 'url']
     bulk_update_data = {
         'group': None,
         'description': 'New description',
@@ -98,7 +105,7 @@ class TenantTest(APIViewTestCases.APIViewTestCase):
 
 class ContactGroupTest(APIViewTestCases.APIViewTestCase):
     model = ContactGroup
-    brief_fields = ['_depth', 'contact_count', 'display', 'id', 'name', 'slug', 'url']
+    brief_fields = ['_depth', 'contact_count', 'description', 'display', 'id', 'name', 'slug', 'url']
     bulk_update_data = {
         'description': 'New description',
     }
@@ -107,13 +114,18 @@ class ContactGroupTest(APIViewTestCases.APIViewTestCase):
     def setUpTestData(cls):
 
         parent_contact_groups = (
-            ContactGroup.objects.create(name='Parent Contact Group 1', slug='parent-contact-group-1'),
+            ContactGroup.objects.create(
+                name='Parent Contact Group 1', slug='parent-contact-group-1', comments='Parent 1 comment'
+            ),
             ContactGroup.objects.create(name='Parent Contact Group 2', slug='parent-contact-group-2'),
         )
 
         ContactGroup.objects.create(name='Contact Group 1', slug='contact-group-1', parent=parent_contact_groups[0])
         ContactGroup.objects.create(name='Contact Group 2', slug='contact-group-2', parent=parent_contact_groups[0])
-        ContactGroup.objects.create(name='Contact Group 3', slug='contact-group-3', parent=parent_contact_groups[0])
+        ContactGroup.objects.create(
+            name='Contact Group 3', slug='contact-group-3', parent=parent_contact_groups[0],
+            comments='Child Group 3 comment',
+        )
 
         cls.create_data = [
             {
@@ -125,18 +137,20 @@ class ContactGroupTest(APIViewTestCases.APIViewTestCase):
                 'name': 'Contact Group 5',
                 'slug': 'contact-group-5',
                 'parent': parent_contact_groups[1].pk,
+                'comments': '',
             },
             {
                 'name': 'Contact Group 6',
                 'slug': 'contact-group-6',
                 'parent': parent_contact_groups[1].pk,
+                'comments': 'Child Group 6 comment',
             },
         ]
 
 
 class ContactRoleTest(APIViewTestCases.APIViewTestCase):
     model = ContactRole
-    brief_fields = ['display', 'id', 'name', 'slug', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'slug', 'url']
     create_data = [
         {
             'name': 'Contact Role 4',
@@ -168,9 +182,9 @@ class ContactRoleTest(APIViewTestCases.APIViewTestCase):
 
 class ContactTest(APIViewTestCases.APIViewTestCase):
     model = Contact
-    brief_fields = ['display', 'id', 'name', 'url']
+    brief_fields = ['description', 'display', 'id', 'name', 'url']
     bulk_update_data = {
-        'group': None,
+        'groups': [],
         'comments': 'New comments',
     }
 
@@ -183,20 +197,22 @@ class ContactTest(APIViewTestCases.APIViewTestCase):
         )
 
         contacts = (
-            Contact(name='Contact 1', group=contact_groups[0]),
-            Contact(name='Contact 2', group=contact_groups[0]),
-            Contact(name='Contact 3', group=contact_groups[0]),
+            Contact(name='Contact 1'),
+            Contact(name='Contact 2'),
+            Contact(name='Contact 3'),
         )
         Contact.objects.bulk_create(contacts)
+        contacts[0].groups.add(contact_groups[0])
+        contacts[1].groups.add(contact_groups[0])
+        contacts[2].groups.add(contact_groups[0])
 
         cls.create_data = [
             {
                 'name': 'Contact 4',
-                'group': contact_groups[1].pk,
+                'groups': [contact_groups[1].pk],
             },
             {
                 'name': 'Contact 5',
-                'group': contact_groups[1].pk,
             },
             {
                 'name': 'Contact 6',
@@ -210,6 +226,7 @@ class ContactAssignmentTest(APIViewTestCases.APIViewTestCase):
     bulk_update_data = {
         'priority': ContactPriorityChoices.PRIORITY_INACTIVE,
     }
+    user_permissions = ('tenancy.view_contact', )
 
     @classmethod
     def setUpTestData(cls):
@@ -238,29 +255,44 @@ class ContactAssignmentTest(APIViewTestCases.APIViewTestCase):
         ContactRole.objects.bulk_create(contact_roles)
 
         contact_assignments = (
-            ContactAssignment(object=sites[0], contact=contacts[0], role=contact_roles[0], priority=ContactPriorityChoices.PRIORITY_PRIMARY),
-            ContactAssignment(object=sites[0], contact=contacts[1], role=contact_roles[1], priority=ContactPriorityChoices.PRIORITY_SECONDARY),
-            ContactAssignment(object=sites[0], contact=contacts[2], role=contact_roles[2], priority=ContactPriorityChoices.PRIORITY_TERTIARY),
+            ContactAssignment(
+                object=sites[0],
+                contact=contacts[0],
+                role=contact_roles[0],
+                priority=ContactPriorityChoices.PRIORITY_PRIMARY,
+            ),
+            ContactAssignment(
+                object=sites[0],
+                contact=contacts[1],
+                role=contact_roles[1],
+                priority=ContactPriorityChoices.PRIORITY_SECONDARY,
+            ),
+            ContactAssignment(
+                object=sites[0],
+                contact=contacts[2],
+                role=contact_roles[2],
+                priority=ContactPriorityChoices.PRIORITY_TERTIARY,
+            ),
         )
         ContactAssignment.objects.bulk_create(contact_assignments)
 
         cls.create_data = [
             {
-                'content_type': 'dcim.site',
+                'object_type': 'dcim.site',
                 'object_id': sites[1].pk,
                 'contact': contacts[3].pk,
                 'role': contact_roles[0].pk,
                 'priority': ContactPriorityChoices.PRIORITY_PRIMARY,
             },
             {
-                'content_type': 'dcim.site',
+                'object_type': 'dcim.site',
                 'object_id': sites[1].pk,
                 'contact': contacts[4].pk,
                 'role': contact_roles[1].pk,
                 'priority': ContactPriorityChoices.PRIORITY_SECONDARY,
             },
             {
-                'content_type': 'dcim.site',
+                'object_type': 'dcim.site',
                 'object_id': sites[1].pk,
                 'contact': contacts[5].pk,
                 'role': contact_roles[2].pk,

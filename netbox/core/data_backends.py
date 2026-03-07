@@ -7,75 +7,57 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from django import forms
-from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.utils.translation import gettext as _
 
-from netbox.registry import registry
-from .choices import DataSourceTypeChoices
+from netbox.data_backends import DataBackend
+from netbox.utils import register_data_backend
+from utilities.constants import HTTP_PROXY_SUPPORTED_SCHEMAS, HTTP_PROXY_SUPPORTED_SOCK_SCHEMAS
+from utilities.proxy import resolve_proxies
+from utilities.socks import ProxyPoolManager
+
 from .exceptions import SyncError
 
 __all__ = (
-    'LocalBackend',
     'GitBackend',
+    'LocalBackend',
     'S3Backend',
+    'url_has_embedded_credentials',
 )
 
 logger = logging.getLogger('netbox.data_backends')
 
 
-def register_backend(name):
+def url_has_embedded_credentials(url):
     """
-    Decorator for registering a DataBackend class.
+    Check if a URL contains embedded credentials (username in the URL).
+
+    URLs like 'https://user@bitbucket.org/...' have embedded credentials.
+    This is used to avoid passing explicit credentials to dulwich when the
+    URL already contains them, which would cause authentication conflicts.
     """
-
-    def _wrapper(cls):
-        registry['data_backends'][name] = cls
-        return cls
-
-    return _wrapper
+    parsed = urlparse(url)
+    return bool(parsed.username)
 
 
-class DataBackend:
-    parameters = {}
-    sensitive_parameters = []
-
-    # Prevent Django's template engine from calling the backend
-    # class when referenced via DataSource.backend_class
-    do_not_call_in_templates = True
-
-    def __init__(self, url, **kwargs):
-        self.url = url
-        self.params = kwargs
-        self.config = self.init_config()
-
-    def init_config(self):
-        """
-        Hook to initialize the instance's configuration.
-        """
-        return
-
-    @property
-    def url_scheme(self):
-        return urlparse(self.url).scheme.lower()
-
-    @contextmanager
-    def fetch(self):
-        raise NotImplemented()
-
-
-@register_backend(DataSourceTypeChoices.LOCAL)
+@register_data_backend()
 class LocalBackend(DataBackend):
+    name = 'local'
+    label = _('Local')
+    is_local = True
 
     @contextmanager
     def fetch(self):
-        logger.debug(f"Data source type is local; skipping fetch")
+        logger.debug("Data source type is local; skipping fetch")
         local_path = urlparse(self.url).path  # Strip file:// scheme
 
         yield local_path
 
 
-@register_backend(DataSourceTypeChoices.GIT)
+@register_data_backend()
 class GitBackend(DataBackend):
+    name = 'git'
+    label = 'Git'
     parameters = {
         'username': forms.CharField(
             required=False,
@@ -102,11 +84,18 @@ class GitBackend(DataBackend):
 
         # Initialize backend config
         config = ConfigDict()
+        self.socks_proxy = None
 
         # Apply HTTP proxy (if configured)
-        if settings.HTTP_PROXIES and self.url_scheme in ('http', 'https'):
-            if proxy := settings.HTTP_PROXIES.get(self.url_scheme):
+        proxies = resolve_proxies(url=self.url, context={'client': self}) or {}
+        if proxy := proxies.get(self.url_scheme):
+            if urlparse(proxy).scheme not in HTTP_PROXY_SUPPORTED_SCHEMAS:
+                raise ImproperlyConfigured(f"Unsupported Git DataSource proxy scheme: {urlparse(proxy).scheme}")
+
+            if self.url_scheme in ('http', 'https'):
                 config.set("http", "proxy", proxy)
+                if urlparse(proxy).scheme in HTTP_PROXY_SUPPORTED_SOCK_SCHEMAS:
+                    self.socks_proxy = proxy
 
         return config
 
@@ -119,33 +108,42 @@ class GitBackend(DataBackend):
         clone_args = {
             "branch": self.params.get('branch'),
             "config": self.config,
-            "depth": 1,
             "errstream": porcelain.NoneStream(),
-            "quiet": True,
         }
 
+        # check if using socks for proxy - if so need to use custom pool_manager
+        if self.socks_proxy:
+            clone_args['pool_manager'] = ProxyPoolManager(self.socks_proxy)
+
         if self.url_scheme in ('http', 'https'):
-            if self.params.get('username'):
+            # Only pass explicit credentials if URL doesn't already contain embedded username
+            # to avoid credential conflicts (see #20902)
+            if not url_has_embedded_credentials(self.url) and self.params.get('username'):
                 clone_args.update(
                     {
                         "username": self.params.get('username'),
                         "password": self.params.get('password'),
                     }
                 )
+        if self.url_scheme:
+            clone_args["quiet"] = True
+            clone_args["depth"] = 1
 
         logger.debug(f"Cloning git repo: {self.url}")
         try:
             porcelain.clone(self.url, local_path.name, **clone_args)
         except BaseException as e:
-            raise SyncError(f"Fetching remote data failed ({type(e).__name__}): {e}")
+            raise SyncError(_("Fetching remote data failed ({name}): {error}").format(name=type(e).__name__, error=e))
 
         yield local_path.name
 
         local_path.cleanup()
 
 
-@register_backend(DataSourceTypeChoices.AMAZON_S3)
+@register_data_backend()
 class S3Backend(DataBackend):
+    name = 'amazon-s3'
+    label = 'Amazon S3'
     parameters = {
         'aws_access_key_id': forms.CharField(
             label=_('AWS access key ID'),
@@ -165,7 +163,7 @@ class S3Backend(DataBackend):
 
         # Initialize backend config
         return Boto3Config(
-            proxies=settings.HTTP_PROXIES,
+            proxies=resolve_proxies(url=self.url, context={'client': self}),
         )
 
     @contextmanager
@@ -182,7 +180,8 @@ class S3Backend(DataBackend):
             region_name=self._region_name,
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            config=self.config
+            config=self.config,
+            endpoint_url=self._endpoint_url
         )
         bucket = s3.Bucket(self._bucket_name)
 
@@ -208,6 +207,11 @@ class S3Backend(DataBackend):
     def _bucket_name(self):
         url_path = urlparse(self.url).path.lstrip('/')
         return url_path.split('/')[0]
+
+    @property
+    def _endpoint_url(self):
+        url_path = urlparse(self.url)
+        return url_path._replace(params="", fragment="", query="", path="").geturl()
 
     @property
     def _remote_path(self):

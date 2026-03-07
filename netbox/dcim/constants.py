@@ -21,11 +21,22 @@ RACK_STARTING_UNIT_DEFAULT = 1
 
 
 #
+# Cables
+#
+
+CABLE_CONNECTOR_MIN = 1
+CABLE_CONNECTOR_MAX = 256
+
+CABLE_POSITION_MIN = 1
+CABLE_POSITION_MAX = 1024
+
+
+#
 # RearPorts
 #
 
-REARPORT_POSITIONS_MIN = 1
-REARPORT_POSITIONS_MAX = 1024
+PORT_POSITION_MIN = 1
+PORT_POSITION_MAX = 1024
 
 
 #
@@ -49,8 +60,15 @@ WIRELESS_IFACE_TYPES = [
     InterfaceTypeChoices.TYPE_80211AD,
     InterfaceTypeChoices.TYPE_80211AX,
     InterfaceTypeChoices.TYPE_80211AY,
+    InterfaceTypeChoices.TYPE_80211BE,
     InterfaceTypeChoices.TYPE_802151,
+    InterfaceTypeChoices.TYPE_802154,
     InterfaceTypeChoices.TYPE_OTHER_WIRELESS,
+    InterfaceTypeChoices.TYPE_GSM,
+    InterfaceTypeChoices.TYPE_CDMA,
+    InterfaceTypeChoices.TYPE_LTE,
+    InterfaceTypeChoices.TYPE_4G,
+    InterfaceTypeChoices.TYPE_5G,
 ]
 
 NONCONNECTABLE_IFACE_TYPES = VIRTUAL_IFACE_TYPES + WIRELESS_IFACE_TYPES
@@ -121,3 +139,18 @@ COMPATIBLE_TERMINATION_TYPES = {
     'powerport': ['poweroutlet', 'powerfeed'],
     'rearport': ['consoleport', 'consoleserverport', 'interface', 'frontport', 'rearport', 'circuittermination'],
 }
+
+# Models which can serve to scope an object by location
+LOCATION_SCOPE_TYPES = (
+    'region', 'sitegroup', 'site', 'location',
+)
+
+
+#
+# MAC addresses
+#
+
+MACADDRESS_ASSIGNMENT_MODELS = Q(
+    Q(app_label='dcim', model='interface') |
+    Q(app_label='virtualization', model='vminterface')
+)

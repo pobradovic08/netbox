@@ -20,14 +20,14 @@ class RestrictedPrefetch(Prefetch):
 
         super().__init__(lookup, queryset=queryset, to_attr=to_attr)
 
-    def get_current_queryset(self, level):
+    def get_current_querysets(self, level):
         params = {
             'user': self.restrict_user,
             'action': self.restrict_action,
         }
 
-        if qs := super().get_current_queryset(level):
-            return qs.restrict(**params)
+        if querysets := super().get_current_querysets(level):
+            return [qs.restrict(**params) for qs in querysets]
 
         # Bit of a hack. If no queryset is defined, pass through the dict of restrict()
         # kwargs to be handled by the field. This is necessary e.g. for GenericForeignKey
@@ -49,22 +49,22 @@ class RestrictedQuerySet(QuerySet):
         permission_required = get_permission_for_model(self.model, action)
 
         # Bypass restriction for superusers and exempt views
-        if user.is_superuser or permission_is_exempt(permission_required):
-            qs = self
+        if user and user.is_superuser or permission_is_exempt(permission_required):
+            return self
 
         # User is anonymous or has not been granted the requisite permission
-        elif not user.is_authenticated or permission_required not in user.get_all_permissions():
-            qs = self.none()
+        if user is None or not user.is_authenticated or permission_required not in user.get_all_permissions():
+            return self.none()
 
         # Filter the queryset to include only objects with allowed attributes
-        else:
-            tokens = {
-                CONSTRAINT_TOKEN_USER: user,
-            }
-            attrs = qs_filter_from_constraints(user._object_perm_cache[permission_required], tokens)
+        constraints = user._object_perm_cache[permission_required]
+        tokens = {
+            CONSTRAINT_TOKEN_USER: user,
+        }
+        if attrs := qs_filter_from_constraints(constraints, tokens):
             # #8715: Avoid duplicates when JOIN on many-to-many fields without using DISTINCT.
             # DISTINCT acts globally on the entire request, which may not be desirable.
             allowed_objects = self.model.objects.filter(attrs)
-            qs = self.filter(pk__in=allowed_objects)
+            return self.filter(pk__in=allowed_objects)
 
-        return qs
+        return self

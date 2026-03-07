@@ -9,6 +9,8 @@ yarn-error.log*
 /netbox/netbox/configuration.py
 /netbox/netbox/ldap_config.py
 /netbox/local/*
+/netbox/media/*
+!/netbox/media/.gitkeep
 /netbox/reports/*
 !/netbox/reports/__init__.py
 /netbox/scripts/*
@@ -17,12 +19,15 @@ yarn-error.log*
 /venv/
 /*.sh
 local_requirements.txt
+local_settings.py
 !upgrade.sh
 fabfile.py
 gunicorn.py
+uwsgi.ini
 netbox.log
 netbox.pid
 .DS_Store
 .idea
 .coverage
 .vscode
+.python-version

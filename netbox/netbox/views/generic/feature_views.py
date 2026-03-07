@@ -1,29 +1,39 @@
-from django.contrib.contenttypes.models import ContentType
 from django.contrib import messages
-from django.db import transaction
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.contrib.contenttypes.models import ContentType
+from django.db import router, transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
-from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
 
-from core.models import Job
-from core.tables import JobTable
-from extras import forms, tables
-from extras.models import *
+from core.models import Job, ObjectChange
+from core.tables import JobTable, ObjectChangeTable
+from extras.forms import JournalEntryForm
+from extras.models import ImageAttachment, JournalEntry
+from extras.tables import JournalEntryTable
+from tenancy.filtersets import ContactAssignmentFilterSet
+from tenancy.forms import ContactAssignmentFilterForm
+from tenancy.models import ContactAssignment
+from tenancy.tables import ContactAssignmentTable
 from utilities.permissions import get_permission_for_model
-from utilities.views import GetReturnURLMixin, ViewTab
+from utilities.views import ConditionalLoginRequiredMixin, GetReturnURLMixin, ViewTab
+
 from .base import BaseMultiObjectView
+from .object_views import ObjectChildrenView
 
 __all__ = (
     'BulkSyncDataView',
     'ObjectChangeLogView',
+    'ObjectContactsView',
+    'ObjectImageAttachmentsView',
     'ObjectJobsView',
     'ObjectJournalView',
     'ObjectSyncDataView',
 )
 
 
-class ObjectChangeLogView(View):
+class ObjectChangeLogView(ConditionalLoginRequiredMixin, View):
     """
     Present a history of changes made to a particular object. The model class must be passed as a keyword argument
     when referencing this view in a URL path. For example:
@@ -36,7 +46,7 @@ class ObjectChangeLogView(View):
     base_template = None
     tab = ViewTab(
         label=_('Changelog'),
-        permission='extras.view_objectchange',
+        permission='core.view_objectchange',
         weight=10000
     )
 
@@ -56,10 +66,9 @@ class ObjectChangeLogView(View):
             Q(changed_object_type=content_type, changed_object_id=obj.pk) |
             Q(related_object_type=content_type, related_object_id=obj.pk)
         )
-        objectchanges_table = tables.ObjectChangeTable(
+        objectchanges_table = ObjectChangeTable(
             data=objectchanges,
             orderable=False,
-            user=request.user
         )
         objectchanges_table.configure(request)
 
@@ -76,7 +85,42 @@ class ObjectChangeLogView(View):
         })
 
 
-class ObjectJournalView(View):
+class ObjectImageAttachmentsView(ConditionalLoginRequiredMixin, View):
+    """
+    Render all images attached to the object as linked thumbnails.
+
+    Attributes:
+        base_template: The name of the template to extend. If not provided, "{app}/{model}.html" will be used.
+    """
+    base_template = None
+    tab = ViewTab(
+        label=_('Images'),
+        badge=lambda obj: obj.images.count(),
+        permission='extras.view_imageattachment',
+        weight=6000
+    )
+
+    def get(self, request, model, **kwargs):
+        obj = get_object_or_404(model.objects.restrict(request.user, 'view'), **kwargs)
+        image_attachments = ImageAttachment.objects.filter(
+            object_type=ContentType.objects.get_for_model(obj),
+            object_id=obj.pk,
+        )
+
+        # Default to using "<app>/<model>.html" as the template, if it exists. Otherwise,
+        # fall back to using base.html.
+        if self.base_template is None:
+            self.base_template = f"{model._meta.app_label}/{model._meta.model_name}.html"
+
+        return render(request, 'extras/object_imageattachments.html', {
+            'object': obj,
+            'image_attachments': image_attachments,
+            'base_template': self.base_template,
+            'tab': self.tab,
+        })
+
+
+class ObjectJournalView(ConditionalLoginRequiredMixin, View):
     """
     Show all journal entries for an object. The model class must be passed as a keyword argument when referencing this
     view in a URL path. For example:
@@ -108,13 +152,13 @@ class ObjectJournalView(View):
             assigned_object_type=content_type,
             assigned_object_id=obj.pk
         )
-        journalentry_table = tables.JournalEntryTable(journalentries, user=request.user)
+        journalentry_table = JournalEntryTable(journalentries)
         journalentry_table.configure(request)
         journalentry_table.columns.hide('assigned_object_type')
         journalentry_table.columns.hide('assigned_object')
 
         if request.user.has_perm('extras.add_journalentry'):
-            form = forms.JournalEntryForm(
+            form = JournalEntryForm(
                 initial={
                     'assigned_object_type': ContentType.objects.get_for_model(obj),
                     'assigned_object_id': obj.pk
@@ -137,11 +181,16 @@ class ObjectJournalView(View):
         })
 
 
-class ObjectJobsView(View):
+class ObjectJobsView(ConditionalLoginRequiredMixin, View):
     """
     Render a list of all Job assigned to an object. For example:
 
-        path('data-sources/<int:pk>/jobs/', ObjectJobsView.as_view(), name='datasource_jobs', kwargs={'model': DataSource}),
+        path(
+            'data-sources/<int:pk>/jobs/',
+             ObjectJobsView.as_view(),
+             name='datasource_jobs',
+             kwargs={'model': DataSource}
+        )
 
     Attributes:
         base_template: The name of the template to extend. If not provided, "{app}/{model}.html" will be used.
@@ -159,7 +208,7 @@ class ObjectJobsView(View):
 
     def get_jobs(self, instance):
         object_type = ContentType.objects.get_for_model(instance)
-        return Job.objects.filter(
+        return Job.objects.defer('data').filter(
             object_type=object_type,
             object_id=instance.id
         )
@@ -170,11 +219,7 @@ class ObjectJobsView(View):
 
         # Gather all Jobs for this object
         jobs = self.get_jobs(obj)
-        jobs_table = JobTable(
-            data=jobs,
-            orderable=False,
-            user=request.user
-        )
+        jobs_table = JobTable(data=jobs, orderable=False)
         jobs_table.configure(request)
 
         # Default to using "<app>/<model>.html" as the template, if it exists. Otherwise,
@@ -190,7 +235,7 @@ class ObjectJobsView(View):
         })
 
 
-class ObjectSyncDataView(View):
+class ObjectSyncDataView(LoginRequiredMixin, View):
 
     def post(self, request, model, **kwargs):
         """
@@ -202,11 +247,14 @@ class ObjectSyncDataView(View):
         obj = get_object_or_404(qs, **kwargs)
 
         if not obj.data_file:
-            messages.error(request, f"Unable to synchronize data: No data file set.")
+            messages.error(request, _("Unable to synchronize data: No data file set."))
             return redirect(obj.get_absolute_url())
 
         obj.sync(save=True)
-        messages.success(request, f"Synchronized data for {model._meta.verbose_name} {obj}.")
+        messages.success(request, _("Synchronized data for {object_type} {object}.").format(
+            object_type=model._meta.verbose_name,
+            object=obj
+        ))
 
         return redirect(obj.get_absolute_url())
 
@@ -224,11 +272,35 @@ class BulkSyncDataView(GetReturnURLMixin, BaseMultiObjectView):
             data_file__isnull=False
         )
 
-        with transaction.atomic():
+        with transaction.atomic(using=router.db_for_write(self.queryset.model)):
             for obj in selected_objects:
                 obj.sync(save=True)
 
-            model_name = self.queryset.model._meta.verbose_name_plural
-            messages.success(request, f"Synced {len(selected_objects)} {model_name}")
+            messages.success(request, _("Synced {count} {object_type}").format(
+                count=len(selected_objects),
+                object_type=self.queryset.model._meta.verbose_name_plural
+            ))
 
         return redirect(self.get_return_url(request))
+
+
+class ObjectContactsView(ObjectChildrenView):
+    child_model = ContactAssignment
+    table = ContactAssignmentTable
+    filterset = ContactAssignmentFilterSet
+    filterset_form = ContactAssignmentFilterForm
+    template_name = 'tenancy/object_contacts.html'
+    tab = ViewTab(
+        label=_('Contacts'),
+        badge=lambda obj: obj.get_contacts().count(),
+        permission='tenancy.view_contactassignment',
+        weight=5000
+    )
+
+    def dispatch(self, request, *args, **kwargs):
+        model = kwargs.pop('model')
+        self.queryset = model.objects.all()
+        return super().dispatch(request, *args, **kwargs)
+
+    def get_children(self, request, parent):
+        return parent.get_contacts().restrict(request.user, 'view').order_by('priority', 'contact', 'role')

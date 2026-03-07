@@ -1,22 +1,23 @@
 import decimal
-import svgwrite
-from svgwrite.container import Hyperlink
-from svgwrite.image import Image
-from svgwrite.gradients import LinearGradient
-from svgwrite.shapes import Rect
-from svgwrite.text import Text
 
+import svgwrite
 from django.conf import settings
 from django.core.exceptions import FieldError
 from django.db.models import Q
 from django.template.defaultfilters import floatformat
 from django.urls import reverse
 from django.utils.http import urlencode
+from svgwrite.container import Hyperlink
+from svgwrite.gradients import LinearGradient
+from svgwrite.image import Image
+from svgwrite.masking import ClipPath
+from svgwrite.shapes import Rect
+from svgwrite.text import Text
 
-from netbox.config import get_config
-from utilities.utils import foreground_color, array_to_ranges
 from dcim.constants import RACK_ELEVATION_BORDER_WIDTH
-
+from netbox.config import get_config
+from utilities.data import array_to_ranges
+from utilities.html import foreground_color
 
 __all__ = (
     'RackElevationSVG',
@@ -29,10 +30,8 @@ STROKE_RESERVED = '#4d4dff'
 
 
 def get_device_name(device):
-    if device.virtual_chassis:
-        name = f'{device.virtual_chassis.name}:{device.vc_position}'
-    elif device.name:
-        name = device.name
+    if device.label:
+        name = device.label
     else:
         name = str(device.device_type)
     if device.devicebay_count:
@@ -47,6 +46,7 @@ def get_device_description(device):
 
     Name: <name>
     Role: <role>
+    Status: <status>
     Device Type: <manufacturer> <model> (<u_height>)
     Asset tag: <asset_tag> (if defined)
     Serial: <serial> (if defined)
@@ -54,6 +54,7 @@ def get_device_description(device):
     """
     description = f'Name: {device.name}'
     description += f'\nRole: {device.role}'
+    description += f'\nStatus: {device.get_status_display()}'
     u_height = f'{floatformat(device.device_type.u_height)}U'
     description += f'\nDevice Type: {device.device_type.manufacturer.name} {device.device_type.model} ({u_height})'
     if device.asset_tag:
@@ -64,6 +65,20 @@ def get_device_description(device):
         description += f'\nDescription: {device.description}'
 
     return description
+
+
+def truncate_text(text, width, font_size=15):
+    """
+    Truncate text to fit within the width of a rectangle.
+
+    :param text: The text to truncate
+    :param width: Width of rectangle
+    :param font_size: Font size (default is 15, ~0.875rem)
+    """
+    char_width = font_size * 0.6  # 0.6 is an approximation of the average character width in pixels
+    max_char = int(width / char_width)
+
+    return text if len(text) <= max_char else text[:max_char] + '...'
 
 
 class RackElevationSVG:
@@ -152,7 +167,10 @@ class RackElevationSVG:
         if self.rack.desc_units:
             y += int((position - self.rack.starting_unit) * self.unit_height)
         else:
-            y += int((self.rack.u_height - position + self.rack.starting_unit) * self.unit_height) - int(height * self.unit_height)
+            y += (
+                int((self.rack.u_height - position + self.rack.starting_unit) * self.unit_height) -
+                int(height * self.unit_height)
+            )
 
         return x, y
 
@@ -173,12 +191,26 @@ class RackElevationSVG:
         link = Hyperlink(href=f'{self.base_url}{device.get_absolute_url()}', target="_parent")
         link.set_desc(description)
 
+        # Create clipPath element
+        # This is necessary as fallback because the truncate_text method is an approximation
+        clip_id = f"clip-{device.id}"
+        clip_path = ClipPath(id=clip_id)
+        clip_path.add(Rect(coords, size))
+
+        self.drawing.defs.add(clip_path)
+
+        # Name to display
+        display_name = truncate_text(name, size[0])
+
         # Add rect element to hyperlink
         if color:
             link.add(Rect(coords, size, style=f'fill: #{color}', class_=f'slot{css_extra}'))
         else:
             link.add(Rect(coords, size, class_=f'slot blocked{css_extra}'))
-        link.add(Text(name, insert=text_coords, fill=text_color, class_=f'label{css_extra}'))
+        link.add(
+            Text(display_name, insert=text_coords, fill=text_color, clip_path=f"url(#{clip_id})",
+                 class_=f'label{css_extra}')
+        )
 
         # Embed device type image if provided
         if self.include_images and image:

@@ -23,6 +23,16 @@ class MarkdownWidget(forms.Textarea):
     """
     template_name = 'widgets/markdown_input.html'
 
+    def __init__(self, attrs=None):
+        # Markdown fields should use monospace font
+        default_attrs = {
+            "class": "font-monospace",
+        }
+        if attrs:
+            default_attrs.update(attrs)
+
+        super().__init__(default_attrs)
+
 
 class NumberWithOptions(forms.NumberInput):
     """
@@ -46,6 +56,14 @@ class SlugWidget(forms.TextInput):
     """
     template_name = 'widgets/sluginput.html'
 
+    def __init__(self, attrs=None):
+        local_attrs = {} if attrs is None else attrs.copy()
+        if 'class' in local_attrs:
+            local_attrs['class'] = f"{local_attrs['class']} slug-field"
+        else:
+            local_attrs['class'] = 'slug-field'
+        super().__init__(local_attrs)
+
 
 class ArrayWidget(forms.Textarea):
     """
@@ -65,5 +83,5 @@ class ChoicesWidget(forms.Textarea):
         if not value:
             return None
         if type(value) is list:
-            return '\n'.join([f'{k},{v}' for k, v in value])
+            return '\n'.join([f'{k}:{v}' for k, v in value])
         return value

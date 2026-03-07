@@ -1,8 +1,6 @@
-from typing import Dict
 from django import template
-from django.template import Context
 
-from netbox.navigation.menu import MENUS
+from netbox.navigation.menu import get_menus
 
 __all__ = (
     'nav',
@@ -13,7 +11,7 @@ register = template.Library()
 
 
 @register.inclusion_tag("navigation/menu.html", takes_context=True)
-def nav(context: Context) -> Dict:
+def nav(context):
     """
     Render the navigation menu.
     """
@@ -21,14 +19,16 @@ def nav(context: Context) -> Dict:
     nav_items = []
 
     # Construct the navigation menu based upon the current user's permissions
-    for menu in MENUS:
+    for menu in get_menus():
         groups = []
         for group in menu.groups:
             items = []
             for item in group.items:
+                if getattr(item, 'auth_required', False) and not user.is_authenticated:
+                    continue
                 if not user.has_perms(item.permissions):
                     continue
-                if item.staff_only and not user.is_staff:
+                if item.staff_only and not user.is_superuser:
                     continue
                 buttons = [
                     button for button in item.buttons if user.has_perms(button.permissions)
@@ -40,6 +40,5 @@ def nav(context: Context) -> Dict:
             nav_items.append((menu, groups))
 
     return {
-        "nav_items": nav_items,
-        "request": context["request"]
+        'nav_items': nav_items,
     }

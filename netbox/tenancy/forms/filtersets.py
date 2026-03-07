@@ -1,15 +1,23 @@
 from django import forms
-from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext_lazy as _
 
-from extras.utils import FeatureQuery
-from netbox.forms import NetBoxModelFilterSetForm
-from tenancy.choices import *
-from tenancy.models import *
-from tenancy.forms import ContactModelFilterForm
-from utilities.forms.fields import (
-    ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField,
+from core.models import ObjectType
+from netbox.forms import (
+    NestedGroupModelFilterSetForm,
+    NetBoxModelFilterSetForm,
+    OrganizationalModelFilterSetForm,
+    PrimaryModelFilterSetForm,
 )
+from utilities.forms.fields import (
+    ContentTypeMultipleChoiceField,
+    DynamicModelMultipleChoiceField,
+    TagFilterField,
+)
+from utilities.forms.rendering import FieldSet
+
+from ..choices import *
+from ..models import *
+from .forms import ContactModelFilterForm
 
 __all__ = (
     'ContactAssignmentFilterForm',
@@ -25,8 +33,13 @@ __all__ = (
 # Tenants
 #
 
-class TenantGroupFilterForm(NetBoxModelFilterSetForm):
+class TenantGroupFilterForm(NestedGroupModelFilterSetForm):
     model = TenantGroup
+    fieldsets = (
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('parent_id', name=_('Tenant Group')),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
+    )
     parent_id = DynamicModelMultipleChoiceField(
         queryset=TenantGroup.objects.all(),
         required=False,
@@ -35,11 +48,13 @@ class TenantGroupFilterForm(NetBoxModelFilterSetForm):
     tag = TagFilterField(model)
 
 
-class TenantFilterForm(ContactModelFilterForm, NetBoxModelFilterSetForm):
+class TenantFilterForm(ContactModelFilterForm, PrimaryModelFilterSetForm):
     model = Tenant
     fieldsets = (
-        (None, ('q', 'filter_id', 'tag', 'group_id')),
-        ('Contacts', ('contact', 'contact_role', 'contact_group'))
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('group_id', name=_('Tenant')),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
+        FieldSet('contact', 'contact_role', 'contact_group', name=_('Contacts'))
     )
     group_id = DynamicModelMultipleChoiceField(
         queryset=TenantGroup.objects.all(),
@@ -54,8 +69,13 @@ class TenantFilterForm(ContactModelFilterForm, NetBoxModelFilterSetForm):
 # Contacts
 #
 
-class ContactGroupFilterForm(NetBoxModelFilterSetForm):
+class ContactGroupFilterForm(NestedGroupModelFilterSetForm):
     model = ContactGroup
+    fieldsets = (
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('parent_id', name=_('Contact Group')),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
+    )
     parent_id = DynamicModelMultipleChoiceField(
         queryset=ContactGroup.objects.all(),
         required=False,
@@ -64,18 +84,27 @@ class ContactGroupFilterForm(NetBoxModelFilterSetForm):
     tag = TagFilterField(model)
 
 
-class ContactRoleFilterForm(NetBoxModelFilterSetForm):
+class ContactRoleFilterForm(OrganizationalModelFilterSetForm):
     model = ContactRole
+    fieldsets = (
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
+    )
     tag = TagFilterField(model)
 
 
-class ContactFilterForm(NetBoxModelFilterSetForm):
+class ContactFilterForm(PrimaryModelFilterSetForm):
     model = Contact
+    fieldsets = (
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('group_id', name=_('Contact')),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
+    )
     group_id = DynamicModelMultipleChoiceField(
         queryset=ContactGroup.objects.all(),
         required=False,
         null_option='None',
-        label=_('Group')
+        label=_('Groups')
     )
     tag = TagFilterField(model)
 
@@ -83,12 +112,11 @@ class ContactFilterForm(NetBoxModelFilterSetForm):
 class ContactAssignmentFilterForm(NetBoxModelFilterSetForm):
     model = ContactAssignment
     fieldsets = (
-        (None, ('q', 'filter_id', 'tag')),
-        (_('Assignment'), ('content_type_id', 'group_id', 'contact_id', 'role_id', 'priority')),
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('object_type_id', 'group_id', 'contact_id', 'role_id', 'priority', name=_('Assignment')),
     )
-    content_type_id = ContentTypeMultipleChoiceField(
-        queryset=ContentType.objects.all(),
-        limit_choices_to=FeatureQuery('contacts'),
+    object_type_id = ContentTypeMultipleChoiceField(
+        queryset=ObjectType.objects.with_feature('contacts'),
         required=False,
         label=_('Object type')
     )

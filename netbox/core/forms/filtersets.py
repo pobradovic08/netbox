@@ -1,33 +1,41 @@
 from django import forms
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import gettext_lazy as _
 
 from core.choices import *
 from core.models import *
-from extras.forms.mixins import SavedFiltersMixin
-from extras.utils import FeatureQuery
-from netbox.forms import NetBoxModelFilterSetForm
-from utilities.forms import BOOLEAN_WITH_BLANK_CHOICES, FilterForm
-from utilities.forms.fields import ContentTypeChoiceField, DynamicModelMultipleChoiceField
-from utilities.forms.widgets import APISelectMultiple, DateTimePicker
+from netbox.forms import NetBoxModelFilterSetForm, PrimaryModelFilterSetForm
+from netbox.forms.mixins import SavedFiltersMixin
+from netbox.utils import get_data_backend_choices
+from users.models import User
+from utilities.forms import BOOLEAN_WITH_BLANK_CHOICES, FilterForm, add_blank_choice
+from utilities.forms.fields import (
+    ContentTypeChoiceField,
+    ContentTypeMultipleChoiceField,
+    DynamicModelMultipleChoiceField,
+    TagFilterField,
+)
+from utilities.forms.rendering import FieldSet
+from utilities.forms.widgets import DateTimePicker
 
 __all__ = (
+    'ConfigRevisionFilterForm',
     'DataFileFilterForm',
     'DataSourceFilterForm',
     'JobFilterForm',
+    'ObjectChangeFilterForm',
 )
 
 
-class DataSourceFilterForm(NetBoxModelFilterSetForm):
+class DataSourceFilterForm(PrimaryModelFilterSetForm):
     model = DataSource
     fieldsets = (
-        (None, ('q', 'filter_id')),
-        (_('Data Source'), ('type', 'status')),
+        FieldSet('q', 'filter_id', 'tag'),
+        FieldSet('type', 'status', 'enabled', 'sync_interval', name=_('Data Source')),
+        FieldSet('owner_group_id', 'owner_id', name=_('Ownership')),
     )
     type = forms.MultipleChoiceField(
         label=_('Type'),
-        choices=DataSourceTypeChoices,
+        choices=get_data_backend_choices,
         required=False
     )
     status = forms.MultipleChoiceField(
@@ -42,13 +50,19 @@ class DataSourceFilterForm(NetBoxModelFilterSetForm):
             choices=BOOLEAN_WITH_BLANK_CHOICES
         )
     )
+    sync_interval = forms.ChoiceField(
+        label=_('Sync interval'),
+        choices=JobIntervalChoices,
+        required=False
+    )
+    tag = TagFilterField(model)
 
 
 class DataFileFilterForm(NetBoxModelFilterSetForm):
     model = DataFile
     fieldsets = (
-        (None, ('q', 'filter_id')),
-        (_('File'), ('source_id',)),
+        FieldSet('q', 'filter_id'),
+        FieldSet('source_id', name=_('File')),
     )
     source_id = DynamicModelMultipleChoiceField(
         queryset=DataSource.objects.all(),
@@ -58,22 +72,27 @@ class DataFileFilterForm(NetBoxModelFilterSetForm):
 
 
 class JobFilterForm(SavedFiltersMixin, FilterForm):
+    model = Job
     fieldsets = (
-        (None, ('q', 'filter_id')),
-        (_('Attributes'), ('object_type', 'status')),
-        (_('Creation'), (
+        FieldSet('q', 'filter_id'),
+        FieldSet('object_type_id', 'status', 'queue_name', name=_('Attributes')),
+        FieldSet(
             'created__before', 'created__after', 'scheduled__before', 'scheduled__after', 'started__before',
-            'started__after', 'completed__before', 'completed__after', 'user',
-        )),
+            'started__after', 'completed__before', 'completed__after', 'user', name=_('Creation')
+        ),
     )
-    object_type = ContentTypeChoiceField(
+    object_type_id = ContentTypeChoiceField(
         label=_('Object Type'),
-        queryset=ContentType.objects.filter(FeatureQuery('jobs').get_query()),
+        queryset=ObjectType.objects.with_feature('jobs'),
         required=False,
     )
     status = forms.MultipleChoiceField(
         label=_('Status'),
         choices=JobStatusChoices,
+        required=False
+    )
+    queue_name = forms.CharField(
+        label=_('Queue'),
         required=False
     )
     created__after = forms.DateTimeField(
@@ -117,10 +136,48 @@ class JobFilterForm(SavedFiltersMixin, FilterForm):
         widget=DateTimePicker()
     )
     user = DynamicModelMultipleChoiceField(
-        queryset=get_user_model().objects.all(),
+        queryset=User.objects.all(),
         required=False,
-        label=_('User'),
-        widget=APISelectMultiple(
-            api_url='/api/users/users/',
-        )
+        label=_('User')
+    )
+
+
+class ObjectChangeFilterForm(SavedFiltersMixin, FilterForm):
+    model = ObjectChange
+    fieldsets = (
+        FieldSet('q', 'filter_id'),
+        FieldSet('time_before', 'time_after', name=_('Time')),
+        FieldSet('action', 'user_id', 'changed_object_type_id', name=_('Attributes')),
+    )
+    time_after = forms.DateTimeField(
+        required=False,
+        label=_('After'),
+        widget=DateTimePicker()
+    )
+    time_before = forms.DateTimeField(
+        required=False,
+        label=_('Before'),
+        widget=DateTimePicker()
+    )
+    action = forms.ChoiceField(
+        label=_('Action'),
+        choices=add_blank_choice(ObjectChangeActionChoices),
+        required=False
+    )
+    user_id = DynamicModelMultipleChoiceField(
+        queryset=User.objects.all(),
+        required=False,
+        label=_('User')
+    )
+    changed_object_type_id = ContentTypeMultipleChoiceField(
+        queryset=ObjectType.objects.with_feature('change_logging'),
+        required=False,
+        label=_('Object Type'),
+    )
+
+
+class ConfigRevisionFilterForm(SavedFiltersMixin, FilterForm):
+    model = ConfigRevision
+    fieldsets = (
+        FieldSet('q', 'filter_id'),
     )

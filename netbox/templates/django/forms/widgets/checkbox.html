@@ -3,4 +3,4 @@
   are always included in the submitted form data.
 {% endcomment %}
 <input type="hidden" name="{{ widget.name }}" value="">
-{% include "django/forms/widgets/input.html" %}
+<input type="checkbox" name="{{ widget.name }}"{% if widget.value != None %} value="{{ widget.value|stringformat:'s' }}"{% endif %} {% include "django/forms/widgets/attrs.html" %} class="form-check-input{% if 'class' in widget.attrs %} {{ widget.attrs.class }}{% endif %}">

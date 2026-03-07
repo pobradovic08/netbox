@@ -1,68 +1,75 @@
-import graphene
-from django.contrib.contenttypes.models import ContentType
-from graphene.types.generic import GenericScalar
+from typing import TYPE_CHECKING, Annotated
 
-from extras.models import ObjectChange
+import strawberry
+import strawberry_django
+from strawberry.types import Info
 
 __all__ = (
-    'ChangelogMixin',
     'ConfigContextMixin',
+    'ContactsMixin',
     'CustomFieldsMixin',
     'ImageAttachmentsMixin',
     'JournalEntriesMixin',
     'TagsMixin',
 )
 
+if TYPE_CHECKING:
+    from tenancy.graphql.types import ContactAssignmentType
 
-class ChangelogMixin:
-    changelog = graphene.List('extras.graphql.types.ObjectChangeType')
-
-    def resolve_changelog(self, info):
-        content_type = ContentType.objects.get_for_model(self)
-        object_changes = ObjectChange.objects.filter(
-            changed_object_type=content_type,
-            changed_object_id=self.pk
-        )
-        return object_changes.restrict(info.context.user, 'view')
+    from .types import ImageAttachmentType, JournalEntryType, TagType
 
 
+@strawberry.type
 class ConfigContextMixin:
-    config_context = GenericScalar()
 
-    def resolve_config_context(self, info):
+    @classmethod
+    def get_queryset(cls, queryset, info: Info, **kwargs):
+        queryset = super().get_queryset(queryset, info, **kwargs)
+
+        # If `config_context` is requested, call annotate_config_context_data() on the queryset
+        selected = {f.name for f in info.selected_fields[0].selections}
+        if 'config_context' in selected and hasattr(queryset, 'annotate_config_context_data'):
+            return queryset.annotate_config_context_data()
+
+        return queryset
+
+    # Ensure `local_context_data` is fetched when `config_context` is requested
+    @strawberry_django.field(only=['local_context_data'])
+    def config_context(self) -> strawberry.scalars.JSON:
         return self.get_config_context()
 
 
+@strawberry.type
 class CustomFieldsMixin:
-    custom_fields = GenericScalar()
 
-    def resolve_custom_fields(self, info):
+    @strawberry_django.field
+    def custom_fields(self) -> strawberry.scalars.JSON:
         return self.custom_field_data
 
 
+@strawberry.type
 class ImageAttachmentsMixin:
-    image_attachments = graphene.List('extras.graphql.types.ImageAttachmentType')
 
-    def resolve_image_attachments(self, info):
-        return self.images.restrict(info.context.user, 'view')
+    @strawberry_django.field
+    def image_attachments(self, info: Info) -> list[Annotated['ImageAttachmentType', strawberry.lazy('.types')]]:
+        return self.images.restrict(info.context.request.user, 'view')
 
 
+@strawberry.type
 class JournalEntriesMixin:
-    journal_entries = graphene.List('extras.graphql.types.JournalEntryType')
 
-    def resolve_journal_entries(self, info):
-        return self.journal_entries.restrict(info.context.user, 'view')
+    @strawberry_django.field
+    def journal_entries(self, info: Info) -> list[Annotated['JournalEntryType', strawberry.lazy('.types')]]:
+        return self.journal_entries.all()
 
 
+@strawberry.type
 class TagsMixin:
-    tags = graphene.List('extras.graphql.types.TagType')
 
-    def resolve_tags(self, info):
-        return self.tags.all()
+    tags: list[Annotated['TagType', strawberry.lazy('.types')]]
 
 
+@strawberry.type
 class ContactsMixin:
-    contacts = graphene.List('tenancy.graphql.types.ContactAssignmentType')
 
-    def resolve_contacts(self, info):
-        return list(self.contacts.all())
+    contacts: list[Annotated['ContactAssignmentType', strawberry.lazy('tenancy.graphql.types')]]

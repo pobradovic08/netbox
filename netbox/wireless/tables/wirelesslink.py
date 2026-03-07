@@ -1,7 +1,7 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
+from django.utils.translation import gettext_lazy as _
 
-from netbox.tables import NetBoxTable, columns
+from netbox.tables import PrimaryModelTable, columns
 from tenancy.tables import TenancyColumnsMixin
 from wireless.models import *
 
@@ -10,7 +10,7 @@ __all__ = (
 )
 
 
-class WirelessLinkTable(TenancyColumnsMixin, NetBoxTable):
+class WirelessLinkTable(TenancyColumnsMixin, PrimaryModelTable):
     id = tables.Column(
         linkify=True,
         verbose_name=_('ID')
@@ -36,15 +36,17 @@ class WirelessLinkTable(TenancyColumnsMixin, NetBoxTable):
         verbose_name=_('Interface B'),
         linkify=True
     )
+    distance = columns.DistanceColumn()
     tags = columns.TagColumn(
         url_name='wireless:wirelesslink_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = WirelessLink
         fields = (
             'pk', 'id', 'status', 'device_a', 'interface_a', 'device_b', 'interface_b', 'ssid', 'tenant',
-            'tenant_group', 'description', 'auth_type', 'auth_cipher', 'auth_psk', 'tags', 'created', 'last_updated',
+            'tenant_group', 'distance', 'description', 'auth_type', 'auth_cipher', 'auth_psk', 'tags',
+            'created', 'last_updated',
         )
         default_columns = (
             'pk', 'id', 'status', 'device_a', 'interface_a', 'device_b', 'interface_b', 'ssid', 'auth_type',

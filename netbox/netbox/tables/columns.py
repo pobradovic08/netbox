@@ -1,5 +1,5 @@
+import zoneinfo
 from dataclasses import dataclass
-from typing import Optional
 from urllib.parse import quote
 
 import django_tables2 as tables
@@ -10,7 +10,6 @@ from django.db.models import DateField, DateTimeField
 from django.template import Context, Template
 from django.urls import reverse
 from django.utils.dateparse import parse_date
-from django.utils.formats import date_format
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -18,9 +17,10 @@ from django_tables2.columns import library
 from django_tables2.utils import Accessor
 
 from extras.choices import CustomFieldTypeChoices
+from utilities.object_types import object_type_identifier, object_type_name
 from utilities.permissions import get_permission_for_model
 from utilities.templatetags.builtins.filters import render_markdown
-from utilities.utils import content_type_identifier, content_type_name, get_viewname
+from utilities.views import get_action_url
 
 __all__ = (
     'ActionsColumn',
@@ -34,11 +34,13 @@ __all__ = (
     'ContentTypesColumn',
     'CustomFieldColumn',
     'CustomLinkColumn',
+    'DictColumn',
+    'DistanceColumn',
     'DurationColumn',
     'LinkedCountColumn',
-    'MarkdownColumn',
-    'ManyToManyColumn',
     'MPTTColumn',
+    'ManyToManyColumn',
+    'MarkdownColumn',
     'TagColumn',
     'TemplateColumn',
     'ToggleColumn',
@@ -51,41 +53,56 @@ __all__ = (
 #
 
 @library.register
-class DateColumn(tables.DateColumn):
+class DateColumn(tables.Column):
     """
-    Overrides the default implementation of DateColumn to better handle null values, returning a default value for
-    tables and null when exporting data. It is registered in the tables library to use this class instead of the
-    default, making this behavior consistent in all fields of type DateField.
+    Render a datetime.date in ISO 8601 format.
     """
     def render(self, value):
         if value:
-            return date_format(value, format="SHORT_DATE_FORMAT")
+            return value.isoformat()
+        return None
 
     def value(self, value):
-        return value
+        if value:
+            return value.isoformat()
+        return None
 
     @classmethod
     def from_field(cls, field, **kwargs):
         if isinstance(field, DateField):
             return cls(**kwargs)
+        return None
 
 
 @library.register
-class DateTimeColumn(tables.DateTimeColumn):
+class DateTimeColumn(tables.Column):
     """
-    Overrides the default implementation of DateTimeColumn to better handle null values, returning a default value for
-    tables and null when exporting data. It is registered in the tables library to use this class instead of the
-    default, making this behavior consistent in all fields of type DateTimeField.
+    Render a datetime.datetime in ISO 8601 format.
+
+    Args:
+        timespec: Granularity specification; passed through to datetime.isoformat()
     """
+    def __init__(self, *args, timespec='seconds', **kwargs):
+        self.timespec = timespec
+        super().__init__(*args, **kwargs)
+
+    def render(self, value):
+        if value:
+            current_tz = zoneinfo.ZoneInfo(settings.TIME_ZONE)
+            value = value.astimezone(current_tz)
+            return f"{value.date().isoformat()} {value.time().isoformat(timespec=self.timespec)}"
+        return None
+
     def value(self, value):
         if value:
-            return date_format(value, format="SHORT_DATETIME_FORMAT")
+            return value.isoformat()
         return None
 
     @classmethod
     def from_field(cls, field, **kwargs):
         if isinstance(field, DateTimeField):
             return cls(**kwargs)
+        return None
 
 
 class DurationColumn(tables.Column):
@@ -161,8 +178,12 @@ class ToggleColumn(tables.CheckBoxColumn):
         visible = kwargs.pop('visible', False)
         if 'attrs' not in kwargs:
             kwargs['attrs'] = {
+                'th': {
+                    'class': 'w-1',
+                    'aria-label': _('Select all'),
+                },
                 'td': {
-                    'class': 'min-width',
+                    'class': 'w-1',
                 },
                 'input': {
                     'class': 'form-check-input'
@@ -181,14 +202,23 @@ class BooleanColumn(tables.Column):
     Custom implementation of BooleanColumn to render a nicely-formatted checkmark or X icon instead of a Unicode
     character.
     """
+    TRUE_MARK = mark_safe('<span class="text-success"><i class="mdi mdi-check-bold"></i></span>')
+    FALSE_MARK = mark_safe('<span class="text-danger"><i class="mdi mdi-close-thick"></i></span>')
+    EMPTY_MARK = mark_safe('<span class="text-muted">&mdash;</span>')  # Placeholder
+
+    def __init__(self, *args, true_mark=TRUE_MARK, false_mark=FALSE_MARK, **kwargs):
+        self.true_mark = true_mark
+        self.false_mark = false_mark
+        super().__init__(*args, **kwargs)
+
     def render(self, value):
-        if value:
-            rendered = '<span class="text-success"><i class="mdi mdi-check-bold"></i></span>'
-        elif value is None:
-            rendered = '<span class="text-muted">&mdash;</span>'
-        else:
-            rendered = '<span class="text-danger"><i class="mdi mdi-close-thick"></i></span>'
-        return mark_safe(rendered)
+        if value is None:
+            return self.EMPTY_MARK
+        if value and self.true_mark:
+            return self.true_mark
+        if not value and self.false_mark:
+            return self.false_mark
+        return self.EMPTY_MARK
 
     def value(self, value):
         return str(value)
@@ -198,8 +228,8 @@ class BooleanColumn(tables.Column):
 class ActionsItem:
     title: str
     icon: str
-    permission: Optional[str] = None
-    css_class: Optional[str] = 'secondary'
+    permission: str | None = None
+    css_class: str | None = 'secondary'
 
 
 class ActionsColumn(tables.Column):
@@ -212,7 +242,11 @@ class ActionsColumn(tables.Column):
     :param split_actions: When True, converts the actions dropdown menu into a split button with first action as the
         direct button link and icon (default: True)
     """
-    attrs = {'td': {'class': 'text-end text-nowrap noprint'}}
+    attrs = {
+        'td': {
+            'class': 'text-end text-nowrap noprint p-1'
+        }
+    }
     empty_values = ()
     actions = {
         'edit': ActionsItem('Edit', 'pencil', 'change', 'warning'),
@@ -235,11 +269,15 @@ class ActionsColumn(tables.Column):
         return ''
 
     def render(self, record, table, **kwargs):
-        # Skip dummy records (e.g. available VLANs) or those with no actions
-        if not getattr(record, 'pk', None) or not self.actions:
+        model = table.Meta.model
+
+        # Skip if no actions or extra buttons are defined
+        if not (self.actions or self.extra_buttons):
+            return ''
+        # Skip dummy records (e.g. available VLANs or IP ranges replacing individual IPs)
+        if not isinstance(record, model) or not getattr(record, 'pk', None):
             return ''
 
-        model = table.Meta.model
         if request := getattr(table, 'context', {}).get('request'):
             return_url = request.GET.get('return_url', request.get_full_path())
             url_appendix = f'?return_url={quote(return_url)}'
@@ -256,13 +294,14 @@ class ActionsColumn(tables.Column):
         for idx, (action, attrs) in enumerate(self.actions.items()):
             permission = get_permission_for_model(model, attrs.permission)
             if attrs.permission is None or user.has_perm(permission):
-                url = reverse(get_viewname(model, action), kwargs={'pk': record.pk})
+                url = get_action_url(model, action=action, kwargs={'pk': record.pk})
 
                 # Render a separate button if a) only one action exists, or b) if split_actions is True
                 if len(self.actions) == 1 or (self.split_actions and idx == 0):
                     dropdown_class = attrs.css_class
                     button = (
-                        f'<a class="btn btn-sm btn-{attrs.css_class}" href="{url}{url_appendix}" type="button">'
+                        f'<a class="btn btn-sm btn-{attrs.css_class}" href="{url}{url_appendix}" type="button" '
+                        f'aria-label="{attrs.title}">'
                         f'<i class="mdi mdi-{attrs.icon}"></i></a>'
                     )
 
@@ -279,7 +318,8 @@ class ActionsColumn(tables.Column):
             html += (
                 f'<span class="btn-group dropdown">'
                 f'  {button}'
-                f'  <a class="btn btn-sm btn-{dropdown_class} dropdown-toggle" type="button" data-bs-toggle="dropdown" style="padding-left: 2px">'
+                f'  <a class="btn btn-sm btn-{dropdown_class} dropdown-toggle" type="button" data-bs-toggle="dropdown" '
+                f'style="padding-left: 2px">'
                 f'  <span class="visually-hidden">{toggle_text}</span></a>'
                 f'  <ul class="dropdown-menu">{"".join(dropdown_links)}</ul>'
                 f'</span>'
@@ -308,21 +348,28 @@ class ActionsColumn(tables.Column):
 class ChoiceFieldColumn(tables.Column):
     """
     Render a model's static ChoiceField with its value from `get_FOO_display()` as a colored badge. Background color is
-    set by the instance's get_FOO_color() method, if defined.
+    set by the instance's get_FOO_color() method, if defined, or can be overridden by a "color" callable.
     """
     DEFAULT_BG_COLOR = 'secondary'
+
+    def __init__(self, *args, color=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.color = color
 
     def render(self, record, bound_column, value):
         if value in self.empty_values:
             return self.default
 
-        # Determine the background color to use (try calling object.get_FOO_color())
-        try:
-            bg_color = getattr(record, f'get_{bound_column.name}_color')() or self.DEFAULT_BG_COLOR
-        except AttributeError:
-            bg_color = self.DEFAULT_BG_COLOR
+        # Determine the background color to use (use "color" callable if given, else try calling object.get_FOO_color())
+        if self.color:
+            bg_color = self.color(record)
+        else:
+            try:
+                bg_color = getattr(record, f'get_{bound_column.name}_color')() or self.DEFAULT_BG_COLOR
+            except AttributeError:
+                bg_color = self.DEFAULT_BG_COLOR
 
-        return mark_safe(f'<span class="badge bg-{bg_color}">{value}</span>')
+        return mark_safe(f'<span class="badge text-bg-{bg_color}">{value}</span>')
 
     def value(self, value):
         return value
@@ -335,12 +382,12 @@ class ContentTypeColumn(tables.Column):
     def render(self, value):
         if value is None:
             return None
-        return content_type_name(value, include_app=False)
+        return object_type_name(value, include_app=False)
 
     def value(self, value):
         if value is None:
             return None
-        return content_type_identifier(value)
+        return object_type_identifier(value)
 
 
 class ContentTypesColumn(tables.ManyToManyColumn):
@@ -354,11 +401,11 @@ class ContentTypesColumn(tables.ManyToManyColumn):
         super().__init__(separator=separator, *args, **kwargs)
 
     def transform(self, obj):
-        return content_type_name(obj, include_app=False)
+        return object_type_name(obj, include_app=False)
 
     def value(self, value):
         return ','.join([
-            content_type_identifier(ct) for ct in self.filter(value)
+            object_type_identifier(ot) for ot in self.filter(value)
         ])
 
 
@@ -420,7 +467,7 @@ class LinkedCountColumn(tables.Column):
                     f'{k}={getattr(record, v) or settings.FILTERS_NULL_CHOICE_VALUE}'
                     for k, v in self.url_params.items()
                 ])
-            return mark_safe(f'<a href="{url}">{value}</a>')
+            return mark_safe(f'<a href="{url}">{escape(value)}</a>')
         return value
 
     def value(self, value):
@@ -494,7 +541,7 @@ class CustomFieldColumn(tables.Column):
         if self.customfield.type == CustomFieldTypeChoices.TYPE_LONGTEXT and value:
             return render_markdown(value)
         if self.customfield.type == CustomFieldTypeChoices.TYPE_DATE and value:
-            return date_format(parse_date(value), format="SHORT_DATE_FORMAT")
+            return parse_date(value).isoformat()
         if value is not None:
             obj = self.customfield.deserialize(value)
             return mark_safe(self._linkify_item(obj))
@@ -661,3 +708,27 @@ class ChoicesColumn(tables.Column):
             value.append(f'({omitted_count} more)')
 
         return ', '.join(value)
+
+
+class DistanceColumn(TemplateColumn):
+    """
+    Distance with template code for formatting
+    """
+    template_code = """
+    {% load helpers %}
+    {% if record.distance %}{{ record.distance|floatformat:"-2" }} {{ record.distance_unit }}{% endif %}
+    """
+
+    def __init__(self, template_code=template_code, order_by='_abs_distance', **kwargs):
+        super().__init__(template_code=template_code, order_by=order_by, **kwargs)
+
+
+class DictColumn(tables.Column):
+    """
+    Render a dictionary of data in a simple key: value format, one pair per line.
+    """
+    def render(self, value):
+        output = '<br />'.join([
+            f'{escape(k)}: {escape(v)}' for k, v in value.items()
+        ])
+        return mark_safe(output)

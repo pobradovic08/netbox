@@ -3,12 +3,13 @@ from django.db.models import Count, F, OuterRef, Q, Subquery, Value
 from django.db.models.expressions import RawSQL
 from django.db.models.functions import Round
 
+from utilities.query import count_related
 from utilities.querysets import RestrictedQuerySet
-from utilities.utils import count_related
 
 __all__ = (
     'ASNRangeQuerySet',
     'PrefixQuerySet',
+    'VLANGroupQuerySet',
     'VLANQuerySet',
 )
 
@@ -63,11 +64,40 @@ class VLANGroupQuerySet(RestrictedQuerySet):
 
         return self.annotate(
             vlan_count=count_related(VLAN, 'group'),
-            utilization=Round(F('vlan_count') / (F('max_vid') - F('min_vid') + 1.0) * 100, 2)
+            utilization=Round(F('vlan_count') * 100.0 / F('_total_vlan_ids'), 2)
         )
 
 
 class VLANQuerySet(RestrictedQuerySet):
+
+    def get_for_site(self, site):
+        """
+        Return all VLANs in the specified site
+        """
+        from .models import VLANGroup
+        q = Q()
+        q |= Q(
+            scope_type=ContentType.objects.get_by_natural_key('dcim', 'site'),
+            scope_id=site.pk
+        )
+
+        if site.region:
+            q |= Q(
+                scope_type=ContentType.objects.get_by_natural_key('dcim', 'region'),
+                scope_id__in=site.region.get_ancestors(include_self=True)
+            )
+        if site.group:
+            q |= Q(
+                scope_type=ContentType.objects.get_by_natural_key('dcim', 'sitegroup'),
+                scope_id__in=site.group.get_ancestors(include_self=True)
+            )
+
+        return self.filter(
+            Q(group__in=VLANGroup.objects.filter(q)) |
+            Q(site=site) |
+            Q(group__scope_id__isnull=True, site__isnull=True) |  # Global group VLANs
+            Q(group__isnull=True, site__isnull=True)  # Global VLANs
+        )
 
     def get_for_device(self, device):
         """
@@ -118,7 +148,7 @@ class VLANQuerySet(RestrictedQuerySet):
 
         # Find all relevant VLANGroups
         q = Q()
-        site = vm.site or vm.cluster.site
+        site = vm.site
         if vm.cluster:
             # Add VLANGroups scoped to the assigned cluster (or its group)
             q |= Q(
@@ -130,6 +160,30 @@ class VLANQuerySet(RestrictedQuerySet):
                     scope_type=ContentType.objects.get_by_natural_key('virtualization', 'clustergroup'),
                     scope_id=vm.cluster.group_id
                 )
+            # Looking all possible cluster scopes
+            if vm.cluster.scope_type == ContentType.objects.get_by_natural_key('dcim', 'location'):
+                site = site or vm.cluster.scope.site
+                q |= Q(
+                    scope_type=ContentType.objects.get_by_natural_key('dcim', 'location'),
+                    scope_id__in=vm.cluster.scope.get_ancestors(include_self=True)
+                )
+            elif vm.cluster.scope_type == ContentType.objects.get_by_natural_key('dcim', 'site'):
+                site = site or vm.cluster.scope
+                q |= Q(
+                    scope_type=ContentType.objects.get_by_natural_key('dcim', 'site'),
+                    scope_id=vm.cluster.scope.pk
+                )
+            elif vm.cluster.scope_type == ContentType.objects.get_by_natural_key('dcim', 'sitegroup'):
+                q |= Q(
+                    scope_type=ContentType.objects.get_by_natural_key('dcim', 'sitegroup'),
+                    scope_id__in=vm.cluster.scope.get_ancestors(include_self=True)
+                )
+            elif vm.cluster.scope_type == ContentType.objects.get_by_natural_key('dcim', 'region'):
+                q |= Q(
+                    scope_type=ContentType.objects.get_by_natural_key('dcim', 'region'),
+                    scope_id__in=vm.cluster.scope.get_ancestors(include_self=True)
+                )
+        # VM can be assigned to a site without a cluster so checking assigned site independently
         if site:
             # Add VLANGroups scoped to the assigned site (or its group or region)
             q |= Q(

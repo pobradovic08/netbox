@@ -20,34 +20,35 @@ A dictionary mapping data backend types to their respective classes. These are u
 
 Stores registration made using `netbox.denormalized.register()`. For each model, a list of related models and their field mappings is maintained to facilitate automatic updates.
 
+### `filtersets`
+
+A dictionary mapping each model (identified by its app and label) to its filterset class, if one has been registered for it. Filtersets are registered using the `@register_filterset` decorator.
+
 ### `model_features`
 
-A dictionary of particular features (e.g. custom fields) mapped to the NetBox models which support them, arranged by app. For example:
+A dictionary of model features (e.g. custom fields, tags, etc.) mapped to the functions used to qualify a model as supporting each feature. Model features are registered using the `register_model_feature()` function in `netbox.utils`.
 
-```python
-{
-    'custom_fields': {
-        'circuits': ['provider', 'circuit'],
-        'dcim': ['site', 'rack', 'devicetype', ...],
-        ...
-    },
-    'webhooks': {
-        'extras': ['configcontext', 'tag', ...],
-        'dcim': ['site', 'rack', 'devicetype', ...],
-    },
-    ...
-}
-```
+Core model features are listed in the [features matrix](./models.md#features-matrix).
 
-Supported model features are listed in the [features matrix](./models.md#features-matrix).
+### `models`
+
+This key lists all models which have been registered in NetBox which are not designated for private use. (Setting `_netbox_private` to True on a model excludes it from this list.) As with individual features under `model_features`, models are organized by app label.
 
 ### `plugins`
 
 This store maintains all registered items for plugins, such as navigation menus, template extensions, etc.
 
+### `request_processors`
+
+A list of context managers to invoke when processing a request e.g. in middleware or when executing a background job. Request processors can be registered with the `@register_request_processor` decorator.
+
 ### `search`
 
 A dictionary mapping each model (identified by its app and label) to its search index class, if one has been registered for it.
+
+### `tables`
+
+A dictionary mapping table classes to lists of extra columns that have been registered by plugins using the `register_table_column()` utility function. Each column is defined as a tuple of name and column instance.
 
 ### `views`
 

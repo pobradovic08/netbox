@@ -1,11 +1,13 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
-from django_tables2.utils import Accessor
+from django.utils.html import escape
 from django.utils.safestring import mark_safe
+from django.utils.translation import gettext_lazy as _
+from django_tables2.utils import Accessor
 
 from dcim.models import Cable
-from netbox.tables import NetBoxTable, columns
+from netbox.tables import PrimaryModelTable, columns
 from tenancy.tables import TenancyColumnsMixin
+
 from .template_code import CABLE_LENGTH
 
 __all__ = (
@@ -35,7 +37,7 @@ class CableTerminationsColumn(tables.Column):
 
     def render(self, value):
         links = [
-            f'<a href="{term.get_absolute_url()}">{term}</a>' for term in self._get_terminations(value)
+            f'<a href="{term.get_absolute_url()}">{escape(term)}</a>' for term in self._get_terminations(value)
         ]
         return mark_safe('<br />'.join(links) or '&mdash;')
 
@@ -47,7 +49,7 @@ class CableTerminationsColumn(tables.Column):
 # Cables
 #
 
-class CableTable(TenancyColumnsMixin, NetBoxTable):
+class CableTable(TenancyColumnsMixin, PrimaryModelTable):
     a_terminations = CableTerminationsColumn(
         cable_end='A',
         orderable=False,
@@ -107,22 +109,26 @@ class CableTable(TenancyColumnsMixin, NetBoxTable):
         verbose_name=_('Site B')
     )
     status = columns.ChoiceFieldColumn()
+    profile = columns.ChoiceFieldColumn()
     length = columns.TemplateColumn(
         template_code=CABLE_LENGTH,
-        order_by=('_abs_length', 'length_unit')
+        order_by=('_abs_length')
     )
     color = columns.ColorColumn()
-    comments = columns.MarkdownColumn()
+    color_name = tables.Column(
+        verbose_name=_('Color Name'),
+        orderable=False
+    )
     tags = columns.TagColumn(
         url_name='dcim:cable_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = Cable
         fields = (
             'pk', 'id', 'label', 'a_terminations', 'b_terminations', 'device_a', 'device_b', 'rack_a', 'rack_b',
-            'location_a', 'location_b', 'site_a', 'site_b', 'status', 'type', 'tenant', 'tenant_group', 'color',
-            'length', 'description', 'comments', 'tags', 'created', 'last_updated',
+            'location_a', 'location_b', 'site_a', 'site_b', 'status', 'profile', 'type', 'tenant', 'tenant_group',
+            'color', 'color_name', 'length', 'description', 'comments', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'id', 'label', 'a_terminations', 'b_terminations', 'status', 'type',

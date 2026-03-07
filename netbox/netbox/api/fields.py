@@ -1,15 +1,21 @@
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from drf_spectacular.utils import extend_schema_field
+from django.db.backends.postgresql.psycopg_any import NumericRange
+from django.utils.translation import gettext as _
 from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema_field
 from netaddr import IPNetwork
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.relations import PrimaryKeyRelatedField, RelatedField
 
 __all__ = (
+    'AttributesField',
     'ChoiceField',
     'ContentTypeField',
     'IPNetworkSerializer',
+    'IntegerRangeSerializer',
+    'RelatedObjectCountField',
     'SerializedPKRelatedField',
 )
 
@@ -41,8 +47,7 @@ class ChoiceField(serializers.Field):
         if data is None:
             if self.allow_null:
                 return True, None
-            else:
-                data = ''
+            data = ''
         return super().validate_empty_values(data)
 
     def to_representation(self, obj):
@@ -53,16 +58,19 @@ class ChoiceField(serializers.Field):
                 'value': obj,
                 'label': self._choices.get(obj, ''),
             }
+        return None
 
     def to_internal_value(self, data):
         if data == '':
             if self.allow_blank:
                 return data
-            raise ValidationError("This field may not be blank.")
+            raise ValidationError(_("This field may not be blank."))
 
         # Provide an explicit error message if the request is trying to write a dict or list
         if isinstance(data, (dict, list)):
-            raise ValidationError('Value must be passed directly (e.g. "foo": 123); do not use a dictionary or list.')
+            raise ValidationError(
+                _('Value must be passed directly (e.g. "foo": 123); do not use a dictionary or list.')
+            )
 
         # Check for string representations of boolean/integer values
         if hasattr(data, 'lower'):
@@ -82,7 +90,7 @@ class ChoiceField(serializers.Field):
         except TypeError:  # Input is an unhashable type
             pass
 
-        raise ValidationError(f"{data} is not a valid choice.")
+        raise ValidationError(_("{value} is not a valid choice.").format(value=data))
 
     @property
     def choices(self):
@@ -95,14 +103,14 @@ class ContentTypeField(RelatedField):
     Represent a ContentType as '<app_label>.<model>'
     """
     default_error_messages = {
-        "does_not_exist": "Invalid content type: {content_type}",
-        "invalid": "Invalid value. Specify a content type as '<app_label>.<model_name>'.",
+        "does_not_exist": _("Invalid content type: {content_type}"),
+        "invalid": _("Invalid value. Specify a content type as '<app_label>.<model_name>'."),
     }
 
     def to_internal_value(self, data):
         try:
             app_label, model = data.split('.')
-            return self.queryset.get(app_label=app_label, model=model)
+            return ContentType.objects.get_by_natural_key(app_label=app_label, model=model)
         except ObjectDoesNotExist:
             self.fail('does_not_exist', content_type=data)
         except (AttributeError, TypeError, ValueError):
@@ -128,10 +136,57 @@ class SerializedPKRelatedField(PrimaryKeyRelatedField):
     Extends PrimaryKeyRelatedField to return a serialized object on read. This is useful for representing related
     objects in a ManyToManyField while still allowing a set of primary keys to be written.
     """
-    def __init__(self, serializer, **kwargs):
+    def __init__(self, serializer, nested=False, **kwargs):
         self.serializer = serializer
+        self.nested = nested
         self.pk_field = kwargs.pop('pk_field', None)
+
         super().__init__(**kwargs)
 
     def to_representation(self, value):
-        return self.serializer(value, context={'request': self.context['request']}).data
+        return self.serializer(value, nested=self.nested, context={'request': self.context['request']}).data
+
+
+@extend_schema_field(OpenApiTypes.INT64)
+class RelatedObjectCountField(serializers.ReadOnlyField):
+    """
+    Represents a read-only integer count of related objects (e.g. the number of racks assigned to a site). This field
+    is detected by get_annotations_for_serializer() when determining the annotations to be added to a queryset
+    depending on the serializer fields selected for inclusion in the response.
+    """
+    def __init__(self, relation, **kwargs):
+        self.relation = relation
+
+        super().__init__(**kwargs)
+
+
+class IntegerRangeSerializer(serializers.Serializer):
+    """
+    Represents a range of integers.
+    """
+    def to_internal_value(self, data):
+        if not isinstance(data, (list, tuple)) or len(data) != 2:
+            raise ValidationError(_("Ranges must be specified in the form (lower, upper)."))
+        if type(data[0]) is not int or type(data[1]) is not int:
+            raise ValidationError(_("Range boundaries must be defined as integers."))
+
+        return NumericRange(data[0], data[1] + 1, bounds='[)')
+
+    def to_representation(self, instance):
+        return instance.lower, instance.upper - 1
+
+
+class AttributesField(serializers.JSONField):
+    """
+    Custom attributes stored as JSON data.
+    """
+    def to_internal_value(self, data):
+        data = super().to_internal_value(data)
+
+        # If updating an object, start with the initial attribute data. This enables the client to modify
+        # individual attributes without having to rewrite the entire field.
+        if data and self.parent.instance:
+            initial_data = getattr(self.parent.instance, self.source, None) or {}
+            return {**initial_data, **data}
+
+        return data

@@ -1,21 +1,56 @@
-from core import filtersets, models
-from netbox.graphql.types import BaseObjectType, NetBoxObjectType
+from typing import Annotated
+
+import strawberry
+import strawberry_django
+from django.contrib.contenttypes.models import ContentType as DjangoContentType
+
+from core import models
+from netbox.graphql.types import BaseObjectType, PrimaryObjectType
+
+from .filters import *
 
 __all__ = (
+    'ContentType',
     'DataFileType',
     'DataSourceType',
+    'ObjectChangeType',
 )
 
 
+@strawberry_django.type(
+    models.DataFile,
+    exclude=['data',],
+    filters=DataFileFilter,
+    pagination=True
+)
 class DataFileType(BaseObjectType):
-    class Meta:
-        model = models.DataFile
-        exclude = ('data',)
-        filterset_class = filtersets.DataFileFilterSet
+    source: Annotated["DataSourceType", strawberry.lazy('core.graphql.types')]
 
 
-class DataSourceType(NetBoxObjectType):
-    class Meta:
-        model = models.DataSource
-        fields = '__all__'
-        filterset_class = filtersets.DataSourceFilterSet
+@strawberry_django.type(
+    models.DataSource,
+    fields='__all__',
+    filters=DataSourceFilter,
+    pagination=True
+)
+class DataSourceType(PrimaryObjectType):
+    datafiles: list[Annotated["DataFileType", strawberry.lazy('core.graphql.types')]]
+
+
+@strawberry_django.type(
+    models.ObjectChange,
+    fields='__all__',
+    filters=ObjectChangeFilter,
+    pagination=True
+)
+class ObjectChangeType(BaseObjectType):
+    pass
+
+
+@strawberry_django.type(
+    DjangoContentType,
+    fields='__all__',
+    pagination=True
+)
+class ContentType:
+    pass

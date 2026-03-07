@@ -1,4 +1,5 @@
-import tempfile
+from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
@@ -29,33 +30,6 @@ JSON_DATA = """
   "Baz": ["A", "B", "C"]
 }
 """
-
-
-class ScriptTest(TestCase):
-
-    def test_load_yaml(self):
-        datafile = tempfile.NamedTemporaryFile()
-        datafile.write(bytes(YAML_DATA, 'UTF-8'))
-        datafile.seek(0)
-
-        data = Script().load_yaml(datafile.name)
-        self.assertEqual(data, {
-            'Foo': 123,
-            'Bar': 456,
-            'Baz': ['A', 'B', 'C'],
-        })
-
-    def test_load_json(self):
-        datafile = tempfile.NamedTemporaryFile()
-        datafile.write(bytes(JSON_DATA, 'UTF-8'))
-        datafile.seek(0)
-
-        data = Script().load_json(datafile.name)
-        self.assertEqual(data, {
-            'Foo': 123,
-            'Bar': 456,
-            'Baz': ['A', 'B', 'C'],
-        })
 
 
 class ScriptVariablesTest(TestCase):
@@ -132,6 +106,54 @@ class ScriptVariablesTest(TestCase):
         form = TestScript().as_form(data, None)
         self.assertTrue(form.is_valid())
         self.assertEqual(form.cleaned_data['var1'], data['var1'])
+
+    def test_decimalvar(self):
+
+        class TestScript(Script):
+
+            var1 = DecimalVar(
+                min_value=-100.500,
+                max_value=100.500,
+                max_digits=6,
+                decimal_places=3,
+                required=False
+            )
+
+            var2 = DecimalVar(
+                max_digits=3,
+                decimal_places=1,
+                required=False
+            )
+
+        # Validate min_value enforcement
+        data = {'var1': -100.501}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var1', form.errors)
+
+        # Validate max_value enforcement
+        data = {'var1': 100.501}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var1', form.errors)
+
+        # Validate max_digits enforcement
+        data = {'var2': 123.4}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var2', form.errors)
+
+        # Validate decimal_places
+        data = {'var2': 1.23}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var2', form.errors)
+
+        # Validate valid data
+        data = {'var1': '50.123'}
+        form = TestScript().as_form(data, None)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['var1'], Decimal(data['var1']))
 
     def test_booleanvar(self):
 
@@ -322,3 +344,47 @@ class ScriptVariablesTest(TestCase):
         form = TestScript().as_form(data, None)
         self.assertTrue(form.is_valid())
         self.assertEqual(form.cleaned_data['var1'], IPNetwork(data['var1']))
+
+    def test_datevar(self):
+
+        class TestScript(Script):
+
+            var1 = DateVar()
+            var2 = DateVar(required=False)
+
+        # Test date validation
+        data = {'var1': 'not a date'}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var1', form.errors)
+
+        # Validate valid data
+        input_date = date(2024, 4, 1)
+        data = {'var1': input_date}
+        form = TestScript().as_form(data, None)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['var1'], input_date)
+        # Validate required=False works for this Var type
+        self.assertEqual(form.cleaned_data['var2'], None)
+
+    def test_datetimevar(self):
+
+        class TestScript(Script):
+
+            var1 = DateTimeVar()
+            var2 = DateTimeVar(required=False)
+
+        # Test datetime validation
+        data = {'var1': 'not a datetime'}
+        form = TestScript().as_form(data, None)
+        self.assertFalse(form.is_valid())
+        self.assertIn('var1', form.errors)
+
+        # Validate valid data
+        input_datetime = datetime(2024, 4, 1, 8, 0, 0, 0, UTC)
+        data = {'var1': input_datetime}
+        form = TestScript().as_form(data, None)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['var1'], input_datetime)
+        # Validate required=False works for this Var type
+        self.assertEqual(form.cleaned_data['var2'], None)

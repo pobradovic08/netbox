@@ -3,29 +3,41 @@
 NetBox includes a Python management shell within which objects can be directly queried, created, modified, and deleted. To enter the shell, run the following command:
 
 ```
-./manage.py nbshell
+cd /opt/netbox
+source /opt/netbox/venv/bin/activate
+python3 netbox/manage.py nbshell
 ```
 
-This will launch a lightly customized version of [the built-in Django shell](https://docs.djangoproject.com/en/stable/ref/django-admin/#shell) with all relevant NetBox models pre-loaded. (If desired, the stock Django shell is also available by executing `./manage.py shell`.)
+This will launch a lightly customized version of [the built-in Django shell](https://docs.djangoproject.com/en/stable/ref/django-admin/#shell) with all relevant NetBox models preloaded. (If desired, the stock Django shell is also available by executing `./manage.py shell`.)
 
 ```
-$ ./manage.py nbshell
+(venv) $ python3 netbox/manage.py nbshell
 ### NetBox interactive shell (localhost)
-### Python 3.7.10 | Django 3.2.5 | NetBox 3.0
-### lsmodels() will show available models. Use help(<model>) for more info.
+### Python v3.12.3 | Django v5.2.10 | NetBox Community v4.5.1
+### lsapps() & lsmodels() will show available models. Use help(<model>) for more info.
 ```
 
 The function `lsmodels()` will print a list of all available NetBox models:
 
 ```
 >>> lsmodels()
-DCIM:
-  ConsolePort
-  ConsolePortTemplate
-  ConsoleServerPort
-  ConsoleServerPortTemplate
-  Device
   ...
+DCIM:
+  dcim.Cable
+  dcim.CableTermination
+  dcim.ConsolePort
+  dcim.ConsolePortTemplate
+  dcim.ConsoleServerPort
+  dcim.ConsoleServerPortTemplate
+  dcim.Device
+  ...
+```
+
+To exit the NetBox shell, type `exit()` or press `Ctrl+D`.
+
+```
+>>> exit()
+(venv) $
 ```
 
 !!! warning
@@ -106,7 +118,7 @@ This approach can span multiple levels of relations. For example, the following 
 ```
 
 !!! note
-    While the above query is functional, it's not very efficient. There are ways to optimize such requests, however they are out of scope for this document. For more information, see the [Django queryset method reference](https://docs.djangoproject.com/en/stable/ref/models/querysets/) documentation.
+    While the above query is functional, it's not very efficient. There are ways to optimize such requests; however, they are out of scope for this document. For more information, see the [Django queryset method reference](https://docs.djangoproject.com/en/stable/ref/models/querysets/) documentation.
 
 Reverse relationships can be traversed as well. For example, the following will find all devices with an interface named "em0":
 
@@ -114,7 +126,7 @@ Reverse relationships can be traversed as well. For example, the following will 
 >>> Device.objects.filter(interfaces__name="em0")
 ```
 
-Character fields can be filtered against partial matches using the `contains` or `icontains` field lookup (the later of which is case-insensitive).
+Character fields can be filtered against partial matches using the `contains` or `icontains` field lookup (the latter of which is case-insensitive).
 
 ```
 >>> Device.objects.filter(name__icontains="testdevice")

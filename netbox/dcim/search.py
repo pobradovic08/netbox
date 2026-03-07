@@ -1,4 +1,5 @@
 from netbox.search import SearchIndex, register_search
+
 from . import models
 
 
@@ -10,6 +11,7 @@ class CableIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('type', 'status', 'tenant', 'label', 'description')
 
 
 @register_search
@@ -21,6 +23,7 @@ class ConsolePortIndex(SearchIndex):
         ('description', 500),
         ('speed', 2000),
     )
+    display_attrs = ('device', 'label', 'type', 'description')
 
 
 @register_search
@@ -32,6 +35,7 @@ class ConsoleServerPortIndex(SearchIndex):
         ('description', 500),
         ('speed', 2000),
     )
+    display_attrs = ('device', 'label', 'type', 'description')
 
 
 @register_search
@@ -41,8 +45,13 @@ class DeviceIndex(SearchIndex):
         ('asset_tag', 50),
         ('serial', 60),
         ('name', 100),
+        ('virtual_chassis', 200),
         ('description', 500),
         ('comments', 5000),
+    )
+    display_attrs = (
+        'site', 'location', 'rack', 'status', 'device_type', 'role', 'tenant', 'platform', 'serial', 'asset_tag',
+        'description',
     )
 
 
@@ -54,6 +63,7 @@ class DeviceBayIndex(SearchIndex):
         ('label', 200),
         ('description', 500),
     )
+    display_attrs = ('device', 'label', 'description')
 
 
 @register_search
@@ -64,6 +74,7 @@ class DeviceRoleIndex(SearchIndex):
         ('slug', 110),
         ('description', 500),
     )
+    display_attrs = ('description',)
 
 
 @register_search
@@ -75,6 +86,7 @@ class DeviceTypeIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('manufacturer', 'part_number', 'description')
 
 
 @register_search
@@ -85,6 +97,17 @@ class FrontPortIndex(SearchIndex):
         ('label', 200),
         ('description', 500),
     )
+    display_attrs = ('device', 'label', 'type', 'description')
+
+
+@register_search
+class MACAddressIndex(SearchIndex):
+    model = models.MACAddress
+    fields = (
+        ('mac_address', 100),
+        ('description', 500),
+    )
+    display_attrs = ('assigned_object', 'description')
 
 
 @register_search
@@ -93,12 +116,12 @@ class InterfaceIndex(SearchIndex):
     fields = (
         ('name', 100),
         ('label', 200),
-        ('mac_address', 300),
         ('wwn', 300),
         ('description', 500),
         ('mtu', 2000),
         ('speed', 2000),
     )
+    display_attrs = ('device', 'label', 'type', 'wwn', 'description')
 
 
 @register_search
@@ -112,6 +135,19 @@ class InventoryItemIndex(SearchIndex):
         ('description', 500),
         ('part_id', 2000),
     )
+    display_attrs = ('device', 'manufacturer', 'parent', 'part_id', 'serial', 'asset_tag', 'description')
+
+
+@register_search
+class InventoryItemRoleIndex(SearchIndex):
+    model = models.InventoryItemRole
+    fields = (
+        ('name', 100),
+        ('slug', 110),
+        ('description', 500),
+        ('comments', 5000),
+    )
+    display_attrs = ('description',)
 
 
 @register_search
@@ -119,9 +155,12 @@ class LocationIndex(SearchIndex):
     model = models.Location
     fields = (
         ('name', 100),
+        ('facility', 100),
         ('slug', 110),
         ('description', 500),
+        ('comments', 5000),
     )
+    display_attrs = ('site', 'status', 'tenant', 'facility', 'description')
 
 
 @register_search
@@ -131,7 +170,9 @@ class ManufacturerIndex(SearchIndex):
         ('name', 100),
         ('slug', 110),
         ('description', 500),
+        ('comments', 5000),
     )
+    display_attrs = ('description',)
 
 
 @register_search
@@ -143,6 +184,7 @@ class ModuleIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('device', 'module_bay', 'module_type', 'status', 'serial', 'asset_tag', 'description')
 
 
 @register_search
@@ -153,6 +195,18 @@ class ModuleBayIndex(SearchIndex):
         ('label', 200),
         ('description', 500),
     )
+    display_attrs = ('device', 'label', 'position', 'description')
+
+
+@register_search
+class ModuleTypeProfileIndex(SearchIndex):
+    model = models.ModuleTypeProfile
+    fields = (
+        ('name', 100),
+        ('description', 500),
+        ('comments', 5000),
+    )
+    display_attrs = ('name', 'description')
 
 
 @register_search
@@ -164,6 +218,7 @@ class ModuleTypeIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('manufacturer', 'model', 'part_number', 'description')
 
 
 @register_search
@@ -174,6 +229,7 @@ class PlatformIndex(SearchIndex):
         ('slug', 110),
         ('description', 500),
     )
+    display_attrs = ('manufacturer', 'description')
 
 
 @register_search
@@ -184,6 +240,7 @@ class PowerFeedIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('power_panel', 'rack', 'status', 'description')
 
 
 @register_search
@@ -194,6 +251,7 @@ class PowerOutletIndex(SearchIndex):
         ('label', 200),
         ('description', 500),
     )
+    display_attrs = ('device', 'label', 'type', 'status', 'description')
 
 
 @register_search
@@ -204,6 +262,7 @@ class PowerPanelIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('site', 'location', 'description')
 
 
 @register_search
@@ -216,6 +275,18 @@ class PowerPortIndex(SearchIndex):
         ('maximum_draw', 2000),
         ('allocated_draw', 2000),
     )
+    display_attrs = ('device', 'label', 'type', 'description')
+
+
+@register_search
+class RackTypeIndex(SearchIndex):
+    model = models.RackType
+    fields = (
+        ('model', 100),
+        ('description', 500),
+        ('comments', 5000),
+    )
+    display_attrs = ('model', 'description')
 
 
 @register_search
@@ -229,6 +300,9 @@ class RackIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = (
+        'site', 'location', 'facility_id', 'tenant', 'status', 'role', 'serial', 'asset_tag', 'description',
+    )
 
 
 @register_search
@@ -238,6 +312,7 @@ class RackReservationIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('rack', 'tenant', 'user', 'description')
 
 
 @register_search
@@ -247,7 +322,9 @@ class RackRoleIndex(SearchIndex):
         ('name', 100),
         ('slug', 110),
         ('description', 500),
+        ('comments', 5000),
     )
+    display_attrs = ('description',)
 
 
 @register_search
@@ -258,6 +335,7 @@ class RearPortIndex(SearchIndex):
         ('label', 200),
         ('description', 500),
     )
+    display_attrs = ('device', 'label', 'type', 'description')
 
 
 @register_search
@@ -267,7 +345,9 @@ class RegionIndex(SearchIndex):
         ('name', 100),
         ('slug', 110),
         ('description', 500),
+        ('comments', 5000),
     )
+    display_attrs = ('parent', 'description')
 
 
 @register_search
@@ -282,6 +362,7 @@ class SiteIndex(SearchIndex):
         ('shipping_address', 2000),
         ('comments', 5000),
     )
+    display_attrs = ('region', 'group', 'status', 'tenant', 'facility', 'description')
 
 
 @register_search
@@ -291,7 +372,9 @@ class SiteGroupIndex(SearchIndex):
         ('name', 100),
         ('slug', 110),
         ('description', 500),
+        ('comments', 5000),
     )
+    display_attrs = ('parent', 'description')
 
 
 @register_search
@@ -303,6 +386,7 @@ class VirtualChassisIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('master', 'domain', 'description')
 
 
 @register_search
@@ -314,3 +398,4 @@ class VirtualDeviceContextIndex(SearchIndex):
         ('description', 500),
         ('comments', 5000),
     )
+    display_attrs = ('device', 'status', 'identifier', 'tenant', 'description')

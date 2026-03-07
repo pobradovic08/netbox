@@ -1,11 +1,18 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox.forms import NetBoxModelBulkEditForm
-from tenancy.choices import ContactPriorityChoices
-from tenancy.models import *
+from netbox.forms import (
+    NestedGroupModelBulkEditForm,
+    NetBoxModelBulkEditForm,
+    OrganizationalModelBulkEditForm,
+    PrimaryModelBulkEditForm,
+)
 from utilities.forms import add_blank_choice
-from utilities.forms.fields import CommentField, DynamicModelChoiceField
+from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField
+from utilities.forms.rendering import FieldSet
+
+from ..choices import ContactPriorityChoices
+from ..models import *
 
 __all__ = (
     'ContactAssignmentBulkEditForm',
@@ -21,23 +28,18 @@ __all__ = (
 # Tenants
 #
 
-class TenantGroupBulkEditForm(NetBoxModelBulkEditForm):
+class TenantGroupBulkEditForm(NestedGroupModelBulkEditForm):
     parent = DynamicModelChoiceField(
         label=_('Parent'),
         queryset=TenantGroup.objects.all(),
         required=False
     )
-    description = forms.CharField(
-        label=_('Description'),
-        max_length=200,
-        required=False
-    )
 
     model = TenantGroup
-    nullable_fields = ('parent', 'description')
+    nullable_fields = ('parent', 'description', 'comments')
 
 
-class TenantBulkEditForm(NetBoxModelBulkEditForm):
+class TenantBulkEditForm(PrimaryModelBulkEditForm):
     group = DynamicModelChoiceField(
         label=_('Group'),
         queryset=TenantGroup.objects.all(),
@@ -46,51 +48,45 @@ class TenantBulkEditForm(NetBoxModelBulkEditForm):
 
     model = Tenant
     fieldsets = (
-        (None, ('group',)),
+        FieldSet('group', 'description'),
     )
-    nullable_fields = ('group',)
+    nullable_fields = ('group', 'description')
 
 
 #
 # Contacts
 #
 
-class ContactGroupBulkEditForm(NetBoxModelBulkEditForm):
+class ContactGroupBulkEditForm(NestedGroupModelBulkEditForm):
     parent = DynamicModelChoiceField(
         label=_('Parent'),
         queryset=ContactGroup.objects.all(),
         required=False
     )
-    description = forms.CharField(
-        label=_('Desciption'),
-        max_length=200,
-        required=False
-    )
 
     model = ContactGroup
     fieldsets = (
-        (None, ('parent', 'description')),
+        FieldSet('parent', 'description'),
     )
-    nullable_fields = ('parent', 'description')
+    nullable_fields = ('parent', 'description', 'comments')
 
 
-class ContactRoleBulkEditForm(NetBoxModelBulkEditForm):
-    description = forms.CharField(
-        label=_('Description'),
-        max_length=200,
-        required=False
-    )
-
+class ContactRoleBulkEditForm(OrganizationalModelBulkEditForm):
     model = ContactRole
     fieldsets = (
-        (None, ('description',)),
+        FieldSet('description'),
     )
-    nullable_fields = ('description',)
+    nullable_fields = ('description', 'comments')
 
 
-class ContactBulkEditForm(NetBoxModelBulkEditForm):
-    group = DynamicModelChoiceField(
-        label=_('Group'),
+class ContactBulkEditForm(PrimaryModelBulkEditForm):
+    add_groups = DynamicModelMultipleChoiceField(
+        label=_('Add groups'),
+        queryset=ContactGroup.objects.all(),
+        required=False
+    )
+    remove_groups = DynamicModelMultipleChoiceField(
+        label=_('Remove groups'),
         queryset=ContactGroup.objects.all(),
         required=False
     )
@@ -115,20 +111,19 @@ class ContactBulkEditForm(NetBoxModelBulkEditForm):
     )
     link = forms.URLField(
         label=_('Link'),
+        assume_scheme='https',
         required=False
     )
-    description = forms.CharField(
-        label=_('Description'),
-        max_length=200,
-        required=False
-    )
-    comments = CommentField()
 
     model = Contact
     fieldsets = (
-        (None, ('group', 'title', 'phone', 'email', 'address', 'link', 'description')),
+        FieldSet('title', 'phone', 'email', 'address', 'link', 'description'),
+        FieldSet('add_groups', 'remove_groups', name=_('Groups')),
     )
-    nullable_fields = ('group', 'title', 'phone', 'email', 'address', 'link', 'description', 'comments')
+
+    nullable_fields = (
+        'add_groups', 'remove_groups', 'title', 'phone', 'email', 'address', 'link', 'description', 'comments'
+    )
 
 
 class ContactAssignmentBulkEditForm(NetBoxModelBulkEditForm):
@@ -150,6 +145,6 @@ class ContactAssignmentBulkEditForm(NetBoxModelBulkEditForm):
 
     model = ContactAssignment
     fieldsets = (
-        (None, ('contact', 'role', 'priority')),
+        FieldSet('contact', 'role', 'priority'),
     )
     nullable_fields = ('priority',)

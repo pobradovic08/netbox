@@ -1,8 +1,8 @@
 import json
-from typing import Dict, List, Tuple
 
 from django import forms
 from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 __all__ = (
     'APISelect',
@@ -18,15 +18,24 @@ class APISelect(forms.Select):
     """
     template_name = 'widgets/apiselect.html'
     option_template_name = 'widgets/select_option.html'
-    dynamic_params: Dict[str, str]
-    static_params: Dict[str, List[str]]
+    dynamic_params: dict[str, str]
+    static_params: dict[str, list[str]]
+
+    def get_context(self, name, value, attrs):
+        context = super().get_context(name, value, attrs)
+
+        # Add quick-add context data, if enabled for the widget
+        if hasattr(self, 'quick_add_context'):
+            context['quick_add'] = self.quick_add_context
+
+        return context
 
     def __init__(self, api_url=None, full=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.attrs['class'] = 'netbox-api-select'
-        self.dynamic_params: Dict[str, List[str]] = {}
-        self.static_params: Dict[str, List[str]] = {}
+        self.attrs['class'] = 'api-select'
+        self.dynamic_params: dict[str, list[str]] = {}
+        self.static_params: dict[str, list[str]] = {}
 
         if api_url:
             self.attrs['data-url'] = '/{}{}'.format(settings.BASE_PATH, api_url.lstrip('/'))  # Inject BASE_PATH
@@ -86,7 +95,7 @@ class APISelect(forms.Select):
         Process an entire query_params dictionary, and handle primitive or list values.
         """
         for key, value in query_params.items():
-            if isinstance(value, (List, Tuple)):
+            if isinstance(value, (list, tuple)):
                 # If value is a list/tuple, iterate through each item.
                 for item in value:
                     self._process_query_param(key, item)
@@ -119,7 +128,11 @@ class APISelect(forms.Select):
                 update = [{'fieldName': f, 'queryParam': q} for (f, q) in self.dynamic_params.items()]
                 self._serialize_params(key, update)
             except IndexError as error:
-                raise RuntimeError(f"Missing required value for dynamic query param: '{self.dynamic_params}'") from error
+                raise RuntimeError(
+                    _("Missing required value for dynamic query param: '{dynamic_params}'").format(
+                        dynamic_params=self.dynamic_params
+                    )
+                ) from error
 
     def _add_static_params(self):
         """
@@ -132,7 +145,11 @@ class APISelect(forms.Select):
                 update = [{'queryParam': k, 'queryValue': v} for (k, v) in self.static_params.items()]
                 self._serialize_params(key, update)
             except IndexError as error:
-                raise RuntimeError(f"Missing required value for static query param: '{self.static_params}'") from error
+                raise RuntimeError(
+                    _("Missing required value for static query param: '{static_params}'").format(
+                        static_params=self.static_params
+                    )
+                ) from error
 
     def add_query_params(self, query_params):
         """
@@ -153,8 +170,4 @@ class APISelect(forms.Select):
 
 
 class APISelectMultiple(APISelect, forms.SelectMultiple):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.attrs['data-multiple'] = 1
+    pass

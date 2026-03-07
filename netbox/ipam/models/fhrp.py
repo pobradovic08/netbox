@@ -1,13 +1,11 @@
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
-from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
-from netbox.models import ChangeLoggedModel, PrimaryModel
 from ipam.choices import *
 from ipam.constants import *
+from netbox.models import ChangeLoggedModel, PrimaryModel
 
 __all__ = (
     'FHRPGroup',
@@ -36,6 +34,7 @@ class FHRPGroup(PrimaryModel):
         max_length=50,
         choices=FHRPGroupAuthTypeChoices,
         blank=True,
+        null=True,
         verbose_name=_('authentication type')
     )
     auth_key = models.CharField(
@@ -48,6 +47,12 @@ class FHRPGroup(PrimaryModel):
         content_type_field='assigned_object_type',
         object_id_field='assigned_object_id',
         related_query_name='fhrpgroup'
+    )
+    services = GenericRelation(
+        to='ipam.Service',
+        content_type_field='parent_object_type',
+        object_id_field='parent_object_id',
+        related_query_name='fhrpgroup',
     )
 
     clone_fields = ('protocol', 'auth_type', 'auth_key', 'description')
@@ -72,13 +77,10 @@ class FHRPGroup(PrimaryModel):
 
         return name
 
-    def get_absolute_url(self):
-        return reverse('ipam:fhrpgroup', args=[self.pk])
-
 
 class FHRPGroupAssignment(ChangeLoggedModel):
     interface_type = models.ForeignKey(
-        to=ContentType,
+        to='contenttypes.ContentType',
         on_delete=models.CASCADE
     )
     interface_id = models.PositiveBigIntegerField()
@@ -102,6 +104,9 @@ class FHRPGroupAssignment(ChangeLoggedModel):
 
     class Meta:
         ordering = ('-priority', 'pk')
+        indexes = (
+            models.Index(fields=('interface_type', 'interface_id')),
+        )
         constraints = (
             models.UniqueConstraint(
                 fields=('interface_type', 'interface_id', 'group'),

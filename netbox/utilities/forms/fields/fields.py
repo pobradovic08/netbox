@@ -1,11 +1,13 @@
 import json
 
 from django import forms
+from django.conf import settings
 from django.db.models import Count
-from django.forms.fields import JSONField as _JSONField, InvalidJSONInput
+from django.forms.fields import InvalidJSONInput
+from django.forms.fields import JSONField as _JSONField
 from django.templatetags.static import static
 from django.utils.translation import gettext_lazy as _
-from netaddr import AddrFormatError, EUI
+from netaddr import EUI, AddrFormatError
 
 from utilities.forms import widgets
 from utilities.validators import EnhancedURLValidator
@@ -16,9 +18,18 @@ __all__ = (
     'JSONField',
     'LaxURLField',
     'MACAddressField',
+    'QueryField',
     'SlugField',
     'TagFilterField',
 )
+
+
+class QueryField(forms.CharField):
+    """
+    A CharField subclass used for global search/query fields in filter forms.
+    This field type signals to FilterModifierMixin to skip enhancement with lookup modifiers.
+    """
+    pass
 
 
 class CommentField(forms.CharField):
@@ -52,6 +63,14 @@ class SlugField(forms.SlugField):
 
         self.widget.attrs['slug-source'] = slug_source
 
+    def get_bound_field(self, form, field_name):
+        if prefix := form.prefix:
+            slug_source = self.widget.attrs.get('slug-source')
+            if slug_source and not slug_source.startswith(f'{prefix}-'):
+                self.widget.attrs['slug-source'] = f"{prefix}-{slug_source}"
+
+        return super().get_bound_field(form, field_name)
+
 
 class ColorField(forms.CharField):
     """
@@ -74,7 +93,8 @@ class TagFilterField(forms.MultipleChoiceField):
                 count=Count('extras_taggeditem_items')
             ).order_by('name')
             return [
-                (str(tag.slug), '{} ({})'.format(tag.name, tag.count)) for tag in tags
+                (settings.FILTERS_NULL_CHOICE_VALUE, settings.FILTERS_NULL_CHOICE_LABEL),  # "None" option
+                *[(str(tag.slug), f'{tag.name} ({tag.count})') for tag in tags]
             ]
 
         # Choices are fetched each time the form is initialized
@@ -93,19 +113,27 @@ class JSONField(_JSONField):
     """
     Custom wrapper around Django's built-in JSONField to avoid presenting "null" as the default text.
     """
+    empty_values = [None, '', ()]
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
+        self.widget.attrs['placeholder'] = ''
+        self.widget.attrs['class'] = 'font-monospace'
         if not self.help_text:
             self.help_text = _('Enter context data in <a href="https://json.org/">JSON</a> format.')
-            self.widget.attrs['placeholder'] = ''
-            self.widget.attrs['class'] = 'font-monospace'
 
     def prepare_value(self, value):
         if isinstance(value, InvalidJSONInput):
             return value
-        if value is None:
+        if value in ('', None):
             return ''
-        return json.dumps(value, sort_keys=True, indent=4)
+        if type(value) is str:
+            try:
+                value = json.loads(value, cls=self.decoder)
+            except json.decoder.JSONDecodeError:
+                return f'"{value}"'
+        return json.dumps(value, sort_keys=True, indent=4, ensure_ascii=False, cls=self.encoder)
 
 
 class MACAddressField(forms.Field):

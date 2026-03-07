@@ -1,8 +1,11 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
+from django.utils.translation import gettext_lazy as _
 
 from core.models import *
-from netbox.tables import NetBoxTable, columns
+from netbox.tables import NetBoxTable, PrimaryModelTable, columns
+
+from .columns import BackendTypeColumn
+from .template_code import DATA_SOURCE_SYNC_BUTTON
 
 __all__ = (
     'DataFileTable',
@@ -10,12 +13,12 @@ __all__ = (
 )
 
 
-class DataSourceTable(NetBoxTable):
+class DataSourceTable(PrimaryModelTable):
     name = tables.Column(
         verbose_name=_('Name'),
-        linkify=True
+        linkify=True,
     )
-    type = columns.ChoiceFieldColumn(
+    type = BackendTypeColumn(
         verbose_name=_('Type'),
     )
     status = columns.ChoiceFieldColumn(
@@ -24,20 +27,29 @@ class DataSourceTable(NetBoxTable):
     enabled = columns.BooleanColumn(
         verbose_name=_('Enabled'),
     )
-    tags = columns.TagColumn(
-        url_name='core:datasource_list'
+    sync_interval = columns.ChoiceFieldColumn(
+        verbose_name=_('Sync interval'),
+    )
+    last_synced = tables.DateTimeColumn(
+        verbose_name=_('Last Synced'),
     )
     file_count = tables.Column(
-        verbose_name='Files'
+        verbose_name=_('Files'),
+    )
+    tags = columns.TagColumn(
+        url_name='core:datasource_list',
+    )
+    actions = columns.ActionsColumn(
+        extra_buttons=DATA_SOURCE_SYNC_BUTTON,
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = DataSource
         fields = (
-            'pk', 'id', 'name', 'type', 'status', 'enabled', 'source_url', 'description', 'comments', 'parameters', 'created',
-            'last_updated', 'file_count',
+            'pk', 'id', 'name', 'type', 'status', 'enabled', 'source_url', 'description', 'sync_interval', 'comments',
+            'parameters', 'last_synced', 'created', 'last_updated', 'file_count',
         )
-        default_columns = ('pk', 'name', 'type', 'status', 'enabled', 'description', 'file_count')
+        default_columns = ('pk', 'name', 'type', 'status', 'enabled', 'description', 'sync_interval', 'file_count')
 
 
 class DataFileTable(NetBoxTable):

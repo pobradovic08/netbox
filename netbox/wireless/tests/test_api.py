@@ -1,7 +1,7 @@
 from django.urls import reverse
 
 from dcim.choices import InterfaceTypeChoices
-from dcim.models import Interface
+from dcim.models import Interface, Site
 from tenancy.models import Tenant
 from utilities.testing import APITestCase, APIViewTestCases, create_test_device
 from wireless.choices import *
@@ -19,15 +19,17 @@ class AppTest(APITestCase):
 
 class WirelessLANGroupTest(APIViewTestCases.APIViewTestCase):
     model = WirelessLANGroup
-    brief_fields = ['_depth', 'display', 'id', 'name', 'slug', 'url', 'wirelesslan_count']
+    brief_fields = ['_depth', 'description', 'display', 'id', 'name', 'slug', 'url', 'wirelesslan_count']
     create_data = [
         {
             'name': 'Wireless LAN Group 4',
             'slug': 'wireless-lan-group-4',
+            'comments': '',
         },
         {
             'name': 'Wireless LAN Group 5',
             'slug': 'wireless-lan-group-5',
+            'comments': 'LAN Group 5 comment',
         },
         {
             'name': 'Wireless LAN Group 6',
@@ -36,6 +38,7 @@ class WirelessLANGroupTest(APIViewTestCases.APIViewTestCase):
     ]
     bulk_update_data = {
         'description': 'New description',
+        'comments': 'New comment',
     }
 
     @classmethod
@@ -48,10 +51,16 @@ class WirelessLANGroupTest(APIViewTestCases.APIViewTestCase):
 
 class WirelessLANTest(APIViewTestCases.APIViewTestCase):
     model = WirelessLAN
-    brief_fields = ['display', 'id', 'ssid', 'url']
+    brief_fields = ['description', 'display', 'id', 'ssid', 'url']
 
     @classmethod
     def setUpTestData(cls):
+
+        sites = (
+            Site(name='Site 1', slug='site-1'),
+            Site(name='Site 2', slug='site-2'),
+        )
+        Site.objects.bulk_create(sites)
 
         tenants = (
             Tenant(name='Tenant 1', slug='tenant-1'),
@@ -94,6 +103,8 @@ class WirelessLANTest(APIViewTestCases.APIViewTestCase):
                 'status': WirelessLANStatusChoices.STATUS_DISABLED,
                 'tenant': tenants[0].pk,
                 'auth_type': WirelessAuthTypeChoices.TYPE_WPA_ENTERPRISE,
+                'scope_type': 'dcim.site',
+                'scope_id': sites[1].pk,
             },
         ]
 
@@ -110,10 +121,13 @@ class WirelessLANTest(APIViewTestCases.APIViewTestCase):
 
 class WirelessLinkTest(APIViewTestCases.APIViewTestCase):
     model = WirelessLink
-    brief_fields = ['display', 'id', 'ssid', 'url']
+    brief_fields = ['description', 'display', 'id', 'ssid', 'url']
     bulk_update_data = {
         'status': 'planned',
+        'distance': 100,
+        'distance_unit': 'm',
     }
+    user_permissions = ('dcim.view_interface', )
 
     @classmethod
     def setUpTestData(cls):

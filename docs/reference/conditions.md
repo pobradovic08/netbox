@@ -89,7 +89,7 @@ The following condition will evaluate as true:
 ```
 
 !!! note "Evaluating static choice fields"
-    Pay close attention when evaluating static choice fields, such as the `status` field above. These fields typically render as a dictionary specifying both the field's raw value (`value`) and its human-friendly label (`label`). be sure to specify on which of these you want to match.
+    Pay close attention when evaluating static choice fields, such as the `status` field above. These fields typically render as a dictionary specifying both the field's raw value (`value`) and its human-friendly label (`label`). Be sure to specify on which of these you want to match.
 
 ## Condition Sets
 
@@ -116,7 +116,7 @@ Multiple conditions can be combined into nested sets using AND or OR logic. This
       ]
     },
     {
-      "attr": "tags",
+      "attr": "tags.slug",
       "value": "exempt",
       "op": "contains"
     }

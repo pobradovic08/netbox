@@ -1,6 +1,10 @@
+from copy import deepcopy
+
+from django.contrib.contenttypes.prefetch import GenericPrefetch
 from django.core.exceptions import ObjectDoesNotExist, PermissionDenied
-from django.db import transaction
+from django.db import router, transaction
 from django.shortcuts import get_object_or_404
+from django.utils.translation import gettext as _
 from django_pglocks import advisory_lock
 from drf_spectacular.utils import extend_schema
 from netaddr import IPSet
@@ -10,18 +14,17 @@ from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 
-from circuits.models import Provider
-from dcim.models import Site
+from dcim.models import Interface
 from ipam import filtersets
 from ipam.models import *
-from ipam.models import L2VPN, L2VPNTermination
 from ipam.utils import get_next_available_prefix
 from netbox.api.viewsets import NetBoxModelViewSet
 from netbox.api.viewsets.mixins import ObjectValidationMixin
 from netbox.config import get_config
 from netbox.constants import ADVISORY_LOCK_KEYS
 from utilities.api import get_serializer_for_model
-from utilities.utils import count_related
+from virtualization.models import VMInterface
+
 from . import serializers
 
 
@@ -38,64 +41,49 @@ class IPAMRootView(APIRootView):
 #
 
 class ASNRangeViewSet(NetBoxModelViewSet):
-    queryset = ASNRange.objects.prefetch_related('tenant', 'rir').all()
+    queryset = ASNRange.objects.all()
     serializer_class = serializers.ASNRangeSerializer
     filterset_class = filtersets.ASNRangeFilterSet
 
 
 class ASNViewSet(NetBoxModelViewSet):
-    queryset = ASN.objects.prefetch_related('tenant', 'rir').annotate(
-        site_count=count_related(Site, 'asns'),
-        provider_count=count_related(Provider, 'asns')
-    )
+    queryset = ASN.objects.all()
     serializer_class = serializers.ASNSerializer
     filterset_class = filtersets.ASNFilterSet
 
 
 class VRFViewSet(NetBoxModelViewSet):
-    queryset = VRF.objects.prefetch_related('tenant').prefetch_related(
-        'import_targets', 'export_targets', 'tags'
-    ).annotate(
-        ipaddress_count=count_related(IPAddress, 'vrf'),
-        prefix_count=count_related(Prefix, 'vrf')
-    )
+    queryset = VRF.objects.all()
     serializer_class = serializers.VRFSerializer
     filterset_class = filtersets.VRFFilterSet
 
 
 class RouteTargetViewSet(NetBoxModelViewSet):
-    queryset = RouteTarget.objects.prefetch_related('tenant').prefetch_related('tags')
+    queryset = RouteTarget.objects.all()
     serializer_class = serializers.RouteTargetSerializer
     filterset_class = filtersets.RouteTargetFilterSet
 
 
 class RIRViewSet(NetBoxModelViewSet):
-    queryset = RIR.objects.annotate(
-        aggregate_count=count_related(Aggregate, 'rir')
-    ).prefetch_related('tags')
+    queryset = RIR.objects.all()
     serializer_class = serializers.RIRSerializer
     filterset_class = filtersets.RIRFilterSet
 
 
 class AggregateViewSet(NetBoxModelViewSet):
-    queryset = Aggregate.objects.prefetch_related('rir').prefetch_related('tags')
+    queryset = Aggregate.objects.all()
     serializer_class = serializers.AggregateSerializer
     filterset_class = filtersets.AggregateFilterSet
 
 
 class RoleViewSet(NetBoxModelViewSet):
-    queryset = Role.objects.annotate(
-        prefix_count=count_related(Prefix, 'role'),
-        vlan_count=count_related(VLAN, 'role')
-    ).prefetch_related('tags')
+    queryset = Role.objects.all()
     serializer_class = serializers.RoleSerializer
     filterset_class = filtersets.RoleFilterSet
 
 
 class PrefixViewSet(NetBoxModelViewSet):
-    queryset = Prefix.objects.prefetch_related(
-        'site', 'vrf__tenant', 'tenant', 'vlan', 'role', 'tags'
-    )
+    queryset = Prefix.objects.prefetch_related("scope")
     serializer_class = serializers.PrefixSerializer
     filterset_class = filtersets.PrefixFilterSet
 
@@ -108,7 +96,7 @@ class PrefixViewSet(NetBoxModelViewSet):
 
 
 class IPRangeViewSet(NetBoxModelViewSet):
-    queryset = IPRange.objects.prefetch_related('vrf', 'role', 'tenant', 'tags')
+    queryset = IPRange.objects.all()
     serializer_class = serializers.IPRangeSerializer
     filterset_class = filtersets.IPRangeFilterSet
 
@@ -117,7 +105,15 @@ class IPRangeViewSet(NetBoxModelViewSet):
 
 class IPAddressViewSet(NetBoxModelViewSet):
     queryset = IPAddress.objects.prefetch_related(
-        'vrf__tenant', 'tenant', 'nat_inside', 'nat_outside', 'tags', 'assigned_object'
+        GenericPrefetch(
+            "assigned_object",
+            [
+                # serializers are taken according to IPADDRESS_ASSIGNMENT_MODELS
+                FHRPGroup.objects.all(),
+                Interface.objects.select_related("cable", "device"),
+                VMInterface.objects.select_related("virtual_machine"),
+            ],
+        ),
     )
     serializer_class = serializers.IPAddressSerializer
     filterset_class = filtersets.IPAddressFilterSet
@@ -136,58 +132,53 @@ class IPAddressViewSet(NetBoxModelViewSet):
 
 
 class FHRPGroupViewSet(NetBoxModelViewSet):
-    queryset = FHRPGroup.objects.prefetch_related('ip_addresses', 'tags')
+    queryset = FHRPGroup.objects.all()
     serializer_class = serializers.FHRPGroupSerializer
     filterset_class = filtersets.FHRPGroupFilterSet
-    brief_prefetch_fields = ('ip_addresses',)
 
 
 class FHRPGroupAssignmentViewSet(NetBoxModelViewSet):
-    queryset = FHRPGroupAssignment.objects.prefetch_related('group', 'interface')
+    queryset = FHRPGroupAssignment.objects.all()
     serializer_class = serializers.FHRPGroupAssignmentSerializer
     filterset_class = filtersets.FHRPGroupAssignmentFilterSet
 
 
 class VLANGroupViewSet(NetBoxModelViewSet):
-    queryset = VLANGroup.objects.annotate_utilization().prefetch_related('tags')
+    queryset = VLANGroup.objects.annotate_utilization()
     serializer_class = serializers.VLANGroupSerializer
     filterset_class = filtersets.VLANGroupFilterSet
 
 
 class VLANViewSet(NetBoxModelViewSet):
     queryset = VLAN.objects.prefetch_related(
-        'site', 'group', 'tenant', 'role', 'tags'
-    ).annotate(
-        prefix_count=count_related(Prefix, 'vlan')
+        'l2vpn_terminations',  # Referenced by VLANSerializer.l2vpn_termination
     )
     serializer_class = serializers.VLANSerializer
     filterset_class = filtersets.VLANFilterSet
 
 
+class VLANTranslationPolicyViewSet(NetBoxModelViewSet):
+    queryset = VLANTranslationPolicy.objects.all()
+    serializer_class = serializers.VLANTranslationPolicySerializer
+    filterset_class = filtersets.VLANTranslationPolicyFilterSet
+
+
+class VLANTranslationRuleViewSet(NetBoxModelViewSet):
+    queryset = VLANTranslationRule.objects.all()
+    serializer_class = serializers.VLANTranslationRuleSerializer
+    filterset_class = filtersets.VLANTranslationRuleFilterSet
+
+
 class ServiceTemplateViewSet(NetBoxModelViewSet):
-    queryset = ServiceTemplate.objects.prefetch_related('tags')
+    queryset = ServiceTemplate.objects.all()
     serializer_class = serializers.ServiceTemplateSerializer
     filterset_class = filtersets.ServiceTemplateFilterSet
 
 
 class ServiceViewSet(NetBoxModelViewSet):
-    queryset = Service.objects.prefetch_related(
-        'device', 'virtual_machine', 'tags', 'ipaddresses'
-    )
+    queryset = Service.objects.all()
     serializer_class = serializers.ServiceSerializer
     filterset_class = filtersets.ServiceFilterSet
-
-
-class L2VPNViewSet(NetBoxModelViewSet):
-    queryset = L2VPN.objects.prefetch_related('import_targets', 'export_targets', 'tenant', 'tags')
-    serializer_class = serializers.L2VPNSerializer
-    filterset_class = filtersets.L2VPNFilterSet
-
-
-class L2VPNTerminationViewSet(NetBoxModelViewSet):
-    queryset = L2VPNTermination.objects.prefetch_related('assigned_object')
-    serializer_class = serializers.L2VPNTerminationSerializer
-    filterset_class = filtersets.L2VPNTerminationFilterSet
 
 
 #
@@ -221,13 +212,13 @@ class AvailableObjectsView(ObjectValidationMixin, APIView):
         """
         Return the parent object.
         """
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def get_available_objects(self, parent, limit=None):
         """
         Return all available objects for the parent.
         """
-        raise NotImplemented()
+        raise NotImplementedError()
 
     def get_extra_context(self, parent):
         """
@@ -285,12 +276,12 @@ class AvailableObjectsView(ObjectValidationMixin, APIView):
             # Determine if the requested number of objects is available
             if not self.check_sufficient_available(serializer.validated_data, available_objects):
                 return Response(
-                    {"detail": f"Insufficient resources are available to satisfy the request"},
+                    {"detail": "Insufficient resources are available to satisfy the request"},
                     status=status.HTTP_409_CONFLICT
                 )
 
             # Prepare object data for deserialization
-            requested_objects = self.prep_object_data(requested_objects, available_objects, parent)
+            requested_objects = self.prep_object_data(deepcopy(requested_objects), available_objects, parent)
 
             # Initialize the serializer with a list or a single object depending on what was requested
             serializer_class = get_serializer_for_model(self.queryset.model)
@@ -305,7 +296,7 @@ class AvailableObjectsView(ObjectValidationMixin, APIView):
 
             # Create the new IP address(es)
             try:
-                with transaction.atomic():
+                with transaction.atomic(using=router.db_for_write(self.queryset.model)):
                     created = serializer.save()
                     self._validate_objects(created)
             except ObjectDoesNotExist:
@@ -390,7 +381,7 @@ class AvailablePrefixesView(AvailableObjectsView):
                     'vrf': parent.vrf.pk if parent.vrf else None,
                 })
             else:
-                raise ValidationError("Insufficient space is available to accommodate the requested prefix size(s)")
+                raise ValidationError(_("Insufficient space is available to accommodate the requested prefix size(s)"))
 
         return requested_objects
 
@@ -410,7 +401,7 @@ class AvailablePrefixesView(AvailableObjectsView):
 class AvailableIPAddressesView(AvailableObjectsView):
     queryset = IPAddress.objects.all()
     read_serializer_class = serializers.AvailableIPSerializer
-    write_serializer_class = serializers.AvailableIPSerializer
+    write_serializer_class = serializers.AvailableIPRequestSerializer
     advisory_lock_key = 'available-ips'
 
     def get_available_objects(self, parent, limit=None):
@@ -431,8 +422,9 @@ class AvailableIPAddressesView(AvailableObjectsView):
     def prep_object_data(self, requested_objects, available_objects, parent):
         available_ips = iter(available_objects)
         for i, request_data in enumerate(requested_objects):
+            prefix_length = request_data.pop('prefix_length', None) or parent.mask_length
             request_data.update({
-                'address': f'{next(available_ips)}/{parent.mask_length}',
+                'address': f'{next(available_ips)}/{prefix_length}',
                 'vrf': parent.vrf.pk if parent.vrf else None,
             })
 
@@ -445,7 +437,7 @@ class AvailableIPAddressesView(AvailableObjectsView):
     @extend_schema(
         methods=["post"],
         responses={201: serializers.IPAddressSerializer(many=True)},
-        request=serializers.IPAddressSerializer(many=True),
+        request=serializers.AvailableIPRequestSerializer(many=True),
     )
     def post(self, request, pk):
         return super().post(request, pk)

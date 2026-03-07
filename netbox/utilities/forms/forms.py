@@ -2,19 +2,24 @@ import re
 
 from django import forms
 from django.utils.translation import gettext as _
-from .mixins import BootstrapMixin
+
+from netbox.models.features import ChangeLoggingMixin
+from utilities.forms.fields import QueryField
+from utilities.forms.mixins import BackgroundJobMixin, FilterModifierMixin
 
 __all__ = (
+    'BulkDeleteForm',
     'BulkEditForm',
     'BulkRenameForm',
-    'ConfirmationForm',
     'CSVModelForm',
+    'ConfirmationForm',
+    'DeleteForm',
     'FilterForm',
     'TableConfigForm',
 )
 
 
-class ConfirmationForm(BootstrapMixin, forms.Form):
+class ConfirmationForm(forms.Form):
     """
     A generic confirmation form. The form is not valid unless the `confirm` field is checked.
     """
@@ -29,14 +34,34 @@ class ConfirmationForm(BootstrapMixin, forms.Form):
     )
 
 
-class BulkEditForm(BootstrapMixin, forms.Form):
+class DeleteForm(ConfirmationForm):
+    """
+    Confirm the deletion of an object, optionally providing a changelog message.
+    """
+    changelog_message = forms.CharField(
+        required=False,
+        max_length=200
+    )
+
+    def __init__(self, *args, instance=None, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Hide the changelog_message filed if the model doesn't support change logging
+        if instance is None or not issubclass(instance._meta.model, ChangeLoggingMixin):
+            self.fields.pop('changelog_message')
+
+
+class BulkEditForm(BackgroundJobMixin, forms.Form):
     """
     Provides bulk edit support for objects.
+
+    Attributes:
+        nullable_fields: A list of field names indicating which fields support being set to null/empty
     """
     nullable_fields = ()
 
 
-class BulkRenameForm(BootstrapMixin, forms.Form):
+class BulkRenameForm(forms.Form):
     """
     An extendable form to be used for renaming objects in bulk.
     """
@@ -66,10 +91,36 @@ class BulkRenameForm(BootstrapMixin, forms.Form):
                 })
 
 
+class BulkDeleteForm(BackgroundJobMixin, ConfirmationForm):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=None,
+        widget=forms.MultipleHiddenInput
+    )
+    changelog_message = forms.CharField(
+        required=False,
+        max_length=200
+    )
+
+    def __init__(self, model, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields['pk'].queryset = model.objects.all()
+
+        # Hide the changelog_message filed if the model doesn't support change logging
+        if model is None or not issubclass(model, ChangeLoggingMixin):
+            self.fields.pop('changelog_message')
+
+
 class CSVModelForm(forms.ModelForm):
     """
     ModelForm used for the import of objects in CSV format.
     """
+    id = forms.IntegerField(
+        label=_('ID'),
+        required=False,
+        help_text=_('Numeric ID of an existing object to update (if not creating a new object)')
+    )
+
     def __init__(self, *args, headers=None, **kwargs):
         self.headers = headers or {}
         super().__init__(*args, **kwargs)
@@ -90,17 +141,17 @@ class CSVModelForm(forms.ModelForm):
         return super().clean()
 
 
-class FilterForm(BootstrapMixin, forms.Form):
+class FilterForm(FilterModifierMixin, forms.Form):
     """
     Base Form class for FilterSet forms.
     """
-    q = forms.CharField(
+    q = QueryField(
         required=False,
         label=_('Search')
     )
 
 
-class TableConfigForm(BootstrapMixin, forms.Form):
+class TableConfigForm(forms.Form):
     """
     Form for configuring user's table preferences.
     """
@@ -116,7 +167,7 @@ class TableConfigForm(BootstrapMixin, forms.Form):
         choices=[],
         required=False,
         widget=forms.SelectMultiple(
-            attrs={'size': 10, 'class': 'form-select'}
+            attrs={'size': 10, 'class': 'form-select select-all'}
         ),
         label=_('Selected Columns')
     )
@@ -127,8 +178,9 @@ class TableConfigForm(BootstrapMixin, forms.Form):
         super().__init__(*args, **kwargs)
 
         # Initialize columns field based on table attributes
-        self.fields['available_columns'].choices = table.available_columns
-        self.fields['columns'].choices = table.selected_columns
+        if table:
+            self.fields['available_columns'].choices = table.available_columns
+            self.fields['columns'].choices = table.selected_columns
 
     @property
     def table_name(self):

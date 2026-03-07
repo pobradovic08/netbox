@@ -1,23 +1,27 @@
 import logging
 import uuid
-from urllib import parse
 
 from django.conf import settings
 from django.contrib import auth, messages
 from django.contrib.auth.middleware import RemoteUserMiddleware as RemoteUserMiddleware_
 from django.core.exceptions import ImproperlyConfigured
-from django.db import connection, ProgrammingError
+from django.db import ProgrammingError, connection
 from django.db.utils import InternalError
 from django.http import Http404, HttpResponseRedirect
+from django_prometheus import middleware
 
-from extras.context_managers import change_logging
 from netbox.config import clear_config, get_config
+from netbox.metrics import Metrics
 from netbox.views import handler_500
-from utilities.api import is_api_request, rest_api_server_error
+from utilities.api import is_api_request, is_graphql_request
+from utilities.error_handlers import handle_rest_api_exception
+from utilities.request import apply_request_processors
 
 __all__ = (
     'CoreMiddleware',
     'MaintenanceModeMiddleware',
+    'PrometheusAfterMiddleware',
+    'PrometheusBeforeMiddleware',
     'RemoteUserMiddleware',
 )
 
@@ -32,19 +36,28 @@ class CoreMiddleware:
         # Assign a random unique ID to the request. This will be used for change logging.
         request.id = uuid.uuid4()
 
-        # Enforce the LOGIN_REQUIRED config parameter. If true, redirect all non-exempt unauthenticated requests
-        # to the login page.
-        if (
-            settings.LOGIN_REQUIRED and
-            not request.user.is_authenticated and
-            not request.path_info.startswith(settings.AUTH_EXEMPT_PATHS)
-        ):
-            login_url = f'{settings.LOGIN_URL}?next={parse.quote(request.get_full_path_info())}'
-            return HttpResponseRedirect(login_url)
-
-        # Enable the change_logging context manager and process the request.
-        with change_logging(request):
+        # Apply all registered request processors
+        with apply_request_processors(request):
             response = self.get_response(request)
+
+        # Set or renew the language cookie based on the user's preference. This handles two cases:
+        # 1. The user just logged in (via any auth backend): the user_logged_in signal stores the preferred language on
+        #    the request so we set the cookie here on the login response.
+        # 2. SESSION_SAVE_EVERY_REQUEST is enabled: renew the language cookie on every request to keep it in sync with
+        #    the session expiry.
+        if hasattr(request, '_language_cookie'):
+            language = request._language_cookie
+        elif request.user.is_authenticated and settings.SESSION_SAVE_EVERY_REQUEST:
+            language = request.user.config.get('locale.language')
+        else:
+            language = None
+        if language:
+            response.set_cookie(
+                key=settings.LANGUAGE_COOKIE_NAME,
+                value=language,
+                max_age=request.session.get_expiry_age(),
+                secure=settings.SESSION_COOKIE_SECURE,
+            )
 
         # Attach the unique request ID as an HTTP header.
         response['X-Request-ID'] = request.id
@@ -67,15 +80,15 @@ class CoreMiddleware:
         """
         # Don't catch exceptions when in debug mode
         if settings.DEBUG:
-            return
+            return None
 
         # Cleanly handle exceptions that occur from REST API requests
         if is_api_request(request):
-            return rest_api_server_error(request)
+            return handle_rest_api_exception(request)
 
         # Ignore Http404s (defer to Django's built-in 404 handling)
         if isinstance(exception, Http404):
-            return
+            return None
 
         # Determine the type of exception. If it's a common issue, return a custom error page with instructions.
         custom_template = None
@@ -89,24 +102,30 @@ class CoreMiddleware:
         # Return a custom error message, or fall back to Django's default 500 error handling
         if custom_template:
             return handler_500(request, template_name=custom_template)
+        return None
 
 
 class RemoteUserMiddleware(RemoteUserMiddleware_):
     """
     Custom implementation of Django's RemoteUserMiddleware which allows for a user-configurable HTTP header name.
     """
+    async_capable = False
     force_logout_if_no_header = False
+
+    def __init__(self, get_response):
+        if get_response is None:
+            raise ValueError("get_response must be provided.")
+        self.get_response = get_response
 
     @property
     def header(self):
         return settings.REMOTE_AUTH_HEADER
 
-    def process_request(self, request):
-        logger = logging.getLogger(
-            'netbox.authentication.RemoteUserMiddleware')
+    def __call__(self, request):
+        logger = logging.getLogger('netbox.authentication.RemoteUserMiddleware')
         # Bypass middleware if remote authentication is not enabled
         if not settings.REMOTE_AUTH_ENABLED:
-            return
+            return self.get_response(request)
         # AuthenticationMiddleware is required so that request.user exists.
         if not hasattr(request, 'user'):
             raise ImproperlyConfigured(
@@ -123,17 +142,16 @@ class RemoteUserMiddleware(RemoteUserMiddleware_):
             # AnonymousUser by the AuthenticationMiddleware).
             if self.force_logout_if_no_header and request.user.is_authenticated:
                 self._remove_invalid_user(request)
-            return
+            return self.get_response(request)
         # If the user is already authenticated and that user is the user we are
         # getting passed in the headers, then the correct user is already
         # persisted in the session and we don't need to continue.
         if request.user.is_authenticated:
             if request.user.get_username() == self.clean_username(username, request):
-                return
-            else:
-                # An authenticated user is associated with the request, but
-                # it does not match the authorized user in the header.
-                self._remove_invalid_user(request)
+                return self.get_response(request)
+            # An authenticated user is associated with the request, but
+            # it does not match the authorized user in the header.
+            self._remove_invalid_user(request)
 
         # We are seeing this user for the first time in this session, attempt
         # to authenticate the user.
@@ -159,6 +177,8 @@ class RemoteUserMiddleware(RemoteUserMiddleware_):
             request.user = user
             auth.login(request, user)
 
+        return self.get_response(request)
+
     def _get_groups(self, request):
         logger = logging.getLogger(
             'netbox.authentication.RemoteUserMiddleware')
@@ -171,6 +191,30 @@ class RemoteUserMiddleware(RemoteUserMiddleware_):
             groups = []
         logger.debug(f"Groups are {groups}")
         return groups
+
+
+class PrometheusBeforeMiddleware(middleware.PrometheusBeforeMiddleware):
+    metrics_cls = Metrics
+
+
+class PrometheusAfterMiddleware(middleware.PrometheusAfterMiddleware):
+    metrics_cls = Metrics
+
+    def process_response(self, request, response):
+        response = super().process_response(request, response)
+
+        # Increment REST API request counters
+        if is_api_request(request):
+            method = self._method(request)
+            name = self._get_view_name(request)
+            self.label_metric(self.metrics.rest_api_requests, request, method=method).inc()
+            self.label_metric(self.metrics.rest_api_requests_by_view_method, request, method=method, view=name).inc()
+
+        # Increment GraphQL API request counters
+        elif is_graphql_request(request):
+            self.metrics.graphql_api_requests.inc()
+
+        return response
 
 
 class MaintenanceModeMiddleware:
@@ -211,7 +255,8 @@ class MaintenanceModeMiddleware:
                             'operations. Please try again later.'
 
             if is_api_request(request):
-                return rest_api_server_error(request, error=error_message)
+                return handle_rest_api_exception(request, error=error_message)
 
             messages.error(request, error_message)
             return HttpResponseRedirect(request.path_info)
+        return None

@@ -2,10 +2,10 @@ from django.utils.translation import gettext_lazy as _
 
 from utilities.choices import ChoiceSet
 
-
 #
 # Clusters
 #
+
 
 class ClusterStatusChoices(ChoiceSet):
     key = 'Cluster.status'
@@ -38,6 +38,7 @@ class VirtualMachineStatusChoices(ChoiceSet):
     STATUS_STAGED = 'staged'
     STATUS_FAILED = 'failed'
     STATUS_DECOMMISSIONING = 'decommissioning'
+    STATUS_PAUSED = 'paused'
 
     CHOICES = [
         (STATUS_OFFLINE, _('Offline'), 'gray'),
@@ -46,4 +47,19 @@ class VirtualMachineStatusChoices(ChoiceSet):
         (STATUS_STAGED, _('Staged'), 'blue'),
         (STATUS_FAILED, _('Failed'), 'red'),
         (STATUS_DECOMMISSIONING, _('Decommissioning'), 'yellow'),
+        (STATUS_PAUSED, _('Paused'), 'orange'),
+    ]
+
+
+class VirtualMachineStartOnBootChoices(ChoiceSet):
+    key = 'VirtualMachine.start_on_boot'
+
+    STATUS_ON = 'on'
+    STATUS_OFF = 'off'
+    STATUS_LAST_STATE = 'laststate'
+
+    CHOICES = [
+        (STATUS_ON, _('On'), 'green'),
+        (STATUS_OFF, _('Off'), 'gray'),
+        (STATUS_LAST_STATE, _('Last State'), 'cyan')
     ]

@@ -1,9 +1,9 @@
-from django.utils.translation import gettext_lazy as _
 import django_tables2 as tables
-from dcim.models import PowerFeed, PowerPanel
-from tenancy.tables import ContactsColumnMixin, TenancyColumnsMixin
+from django.utils.translation import gettext_lazy as _
 
-from netbox.tables import NetBoxTable, columns
+from dcim.models import PowerFeed, PowerPanel
+from netbox.tables import PrimaryModelTable, columns
+from tenancy.tables import ContactsColumnMixin, TenancyColumnsMixin
 
 from .devices import CableTerminationTable
 
@@ -17,7 +17,7 @@ __all__ = (
 # Power panels
 #
 
-class PowerPanelTable(ContactsColumnMixin, NetBoxTable):
+class PowerPanelTable(ContactsColumnMixin, PrimaryModelTable):
     name = tables.Column(
         verbose_name=_('Name'),
         linkify=True
@@ -35,14 +35,11 @@ class PowerPanelTable(ContactsColumnMixin, NetBoxTable):
         url_params={'power_panel_id': 'pk'},
         verbose_name=_('Power Feeds')
     )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
-    )
     tags = columns.TagColumn(
         url_name='dcim:powerpanel_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(PrimaryModelTable.Meta):
         model = PowerPanel
         fields = (
             'pk', 'id', 'name', 'site', 'location', 'powerfeed_count', 'contacts', 'description', 'comments', 'tags',
@@ -57,7 +54,7 @@ class PowerPanelTable(ContactsColumnMixin, NetBoxTable):
 
 # We're not using PathEndpointTable for PowerFeed because power connections
 # cannot traverse pass-through ports.
-class PowerFeedTable(TenancyColumnsMixin, CableTerminationTable):
+class PowerFeedTable(TenancyColumnsMixin, CableTerminationTable, PrimaryModelTable):
     name = tables.Column(
         verbose_name=_('Name'),
         linkify=True
@@ -87,19 +84,21 @@ class PowerFeedTable(TenancyColumnsMixin, CableTerminationTable):
         linkify=True,
         verbose_name=_('Tenant')
     )
-    comments = columns.MarkdownColumn(
-        verbose_name=_('Comments'),
+    site = tables.Column(
+        accessor='rack__site',
+        linkify=True,
+        verbose_name=_('Site'),
     )
     tags = columns.TagColumn(
         url_name='dcim:powerfeed_list'
     )
 
-    class Meta(NetBoxTable.Meta):
+    class Meta(CableTerminationTable.Meta, PrimaryModelTable.Meta):
         model = PowerFeed
         fields = (
-            'pk', 'id', 'name', 'power_panel', 'rack', 'status', 'type', 'supply', 'voltage', 'amperage', 'phase',
-            'max_utilization', 'mark_connected', 'cable', 'cable_color', 'link_peer', 'available_power', 'tenant',
-            'tenant_group', 'description', 'comments', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'power_panel', 'site', 'rack', 'status', 'type', 'supply', 'voltage', 'amperage',
+            'phase', 'max_utilization', 'mark_connected', 'cable', 'cable_color', 'link_peer', 'available_power',
+            'tenant', 'tenant_group', 'description', 'comments', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'name', 'power_panel', 'rack', 'status', 'type', 'supply', 'voltage', 'amperage', 'phase', 'cable',

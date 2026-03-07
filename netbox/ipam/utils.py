@@ -1,15 +1,36 @@
+from dataclasses import dataclass
+
 import netaddr
+from django.utils.translation import gettext_lazy as _
 
 from .constants import *
-from .models import Prefix, VLAN
+from .models import VLAN, Prefix
 
 __all__ = (
-    'add_available_ipaddresses',
+    'AvailableIPSpace',
     'add_available_vlans',
     'add_requested_prefixes',
+    'annotate_ip_space',
     'get_next_available_prefix',
     'rebuild_prefixes',
 )
+
+
+@dataclass
+class AvailableIPSpace:
+    """
+    A representation of available IP space between two IP addresses/ranges.
+    """
+    size: int
+    first_ip: str
+
+    @property
+    def title(self):
+        if self.size == 1:
+            return _('1 IP available')
+        if self.size <= 65536:
+            return _('{count} IPs available').format(count=self.size)
+        return _('Many IPs available')
 
 
 def add_requested_prefixes(parent, prefix_list, show_available=True, show_assigned=True):
@@ -28,6 +49,9 @@ def add_requested_prefixes(parent, prefix_list, show_available=True, show_assign
     if prefix_list and show_available:
 
         # Find all unallocated space, add fake Prefix objects to child_prefixes.
+        # IMPORTANT: These are unsaved Prefix instances (pk=None). If this is ever changed to use
+        # saved Prefix instances with real pks, bulk delete will fail for mixed-type selections
+        # due to single-model form validation. See: https://github.com/netbox-community/netbox/issues/21176
         available_prefixes = netaddr.IPSet(parent) ^ netaddr.IPSet([p.prefix for p in prefix_list])
         available_prefixes = [Prefix(prefix=p, status=None) for p in available_prefixes.iter_cidrs()]
         child_prefixes = child_prefixes + available_prefixes
@@ -42,91 +66,133 @@ def add_requested_prefixes(parent, prefix_list, show_available=True, show_assign
     return child_prefixes
 
 
-def add_available_ipaddresses(prefix, ipaddress_list, is_pool=False):
-    """
-    Annotate ranges of available IP addresses within a given prefix. If is_pool is True, the first and last IP will be
-    considered usable (regardless of mask length).
-    """
+def annotate_ip_space(prefix):
+    # Compile child objects
+    records = []
+    records.extend([
+        (iprange.start_address.ip, iprange) for iprange in prefix.get_child_ranges(mark_populated=True)
+    ])
+    records.extend([
+        (ip.address.ip, ip) for ip in prefix.get_child_ips()
+    ])
+    records = sorted(records, key=lambda x: x[0])
+
+    # Determine the first & last valid IP addresses in the prefix
+    if (
+        prefix.is_pool
+        or (prefix.family == 4 and prefix.mask_length >= 31)
+        or (prefix.family == 6 and prefix.mask_length >= 127)
+    ):
+        # Pool, IPv4 /31-/32 or IPv6 /127-/128 sets are fully usable
+        first_ip_in_prefix = netaddr.IPAddress(prefix.prefix.first)
+        last_ip_in_prefix = netaddr.IPAddress(prefix.prefix.last)
+    elif prefix.family == 4:
+        # Ignore the network and broadcast addresses for non-pool IPv4 prefixes larger than /31
+        first_ip_in_prefix = netaddr.IPAddress(prefix.prefix.first + 1)
+        last_ip_in_prefix = netaddr.IPAddress(prefix.prefix.last - 1)
+    else:
+        # For IPv6 prefixes, omit the Subnet-Router anycast address (RFC 4291)
+        first_ip_in_prefix = netaddr.IPAddress(prefix.prefix.first + 1)
+        last_ip_in_prefix = netaddr.IPAddress(prefix.prefix.last)
+
+    if not records:
+        return [
+            AvailableIPSpace(
+                size=int(last_ip_in_prefix - first_ip_in_prefix + 1),
+                first_ip=f'{first_ip_in_prefix}/{prefix.mask_length}'
+            )
+        ]
 
     output = []
     prev_ip = None
 
-    # Ignore the network and broadcast addresses for non-pool IPv4 prefixes larger than /31.
-    if prefix.version == 4 and prefix.prefixlen < 31 and not is_pool:
-        first_ip_in_prefix = netaddr.IPAddress(prefix.first + 1)
-        last_ip_in_prefix = netaddr.IPAddress(prefix.last - 1)
-    else:
-        first_ip_in_prefix = netaddr.IPAddress(prefix.first)
-        last_ip_in_prefix = netaddr.IPAddress(prefix.last)
-
-    if not ipaddress_list:
-        return [(
-            int(last_ip_in_prefix - first_ip_in_prefix + 1),
-            '{}/{}'.format(first_ip_in_prefix, prefix.prefixlen)
-        )]
-
     # Account for any available IPs before the first real IP
-    if ipaddress_list[0].address.ip > first_ip_in_prefix:
-        skipped_count = int(ipaddress_list[0].address.ip - first_ip_in_prefix)
-        first_skipped = '{}/{}'.format(first_ip_in_prefix, prefix.prefixlen)
-        output.append((skipped_count, first_skipped))
+    if records[0][0] > first_ip_in_prefix:
+        output.append(AvailableIPSpace(
+            size=int(records[0][0] - first_ip_in_prefix),
+            first_ip=f'{first_ip_in_prefix}/{prefix.mask_length}'
+        ))
 
-    # Iterate through existing IPs and annotate free ranges
-    for ip in ipaddress_list:
+    # Add IP ranges & addresses, annotating available space in between records
+    for record in records:
         if prev_ip:
-            diff = int(ip.address.ip - prev_ip.address.ip)
-            if diff > 1:
-                first_skipped = '{}/{}'.format(prev_ip.address.ip + 1, prefix.prefixlen)
-                output.append((diff - 1, first_skipped))
-        output.append(ip)
-        prev_ip = ip
+            # Annotate available space
+            if (diff := int(record[0]) - int(prev_ip)) > 1:
+                first_skipped = f'{prev_ip + 1}/{prefix.mask_length}'
+                output.append(AvailableIPSpace(
+                    size=diff - 1,
+                    first_ip=first_skipped
+                ))
+
+        output.append(record[1])
+
+        # Update the previous IP address
+        if hasattr(record[1], 'end_address'):
+            prev_ip = record[1].end_address.ip
+        else:
+            prev_ip = record[0]
 
     # Include any remaining available IPs
-    if prev_ip.address.ip < last_ip_in_prefix:
-        skipped_count = int(last_ip_in_prefix - prev_ip.address.ip)
-        first_skipped = '{}/{}'.format(prev_ip.address.ip + 1, prefix.prefixlen)
-        output.append((skipped_count, first_skipped))
+    if prev_ip < last_ip_in_prefix:
+        output.append(AvailableIPSpace(
+            size=int(last_ip_in_prefix - prev_ip),
+            first_ip=f'{prev_ip + 1}/{prefix.mask_length}'
+        ))
 
     return output
 
 
-def add_available_vlans(vlans, vlan_group=None):
+def available_vlans_from_range(vlans, vlan_group, vid_range):
     """
     Create fake records for all gaps between used VLANs
     """
-    min_vid = vlan_group.min_vid if vlan_group else VLAN_VID_MIN
-    max_vid = vlan_group.max_vid if vlan_group else VLAN_VID_MAX
+    min_vid = int(vid_range.lower) if vid_range else VLAN_VID_MIN
+    max_vid = int(vid_range.upper) if vid_range else VLAN_VID_MAX
 
     if not vlans:
         return [{
             'vid': min_vid,
             'vlan_group': vlan_group,
-            'available': max_vid - min_vid + 1
+            'available': max_vid - min_vid
         }]
 
-    prev_vid = max_vid
+    prev_vid = min_vid - 1
     new_vlans = []
     for vlan in vlans:
+
+        # Ignore VIDs outside the range
+        if not min_vid <= vlan.vid < max_vid:
+            continue
+
+        # Annotate any available VIDs between the previous (or minimum) VID
+        # and the current VID
         if vlan.vid - prev_vid > 1:
             new_vlans.append({
                 'vid': prev_vid + 1,
                 'vlan_group': vlan_group,
                 'available': vlan.vid - prev_vid - 1,
             })
+
         prev_vid = vlan.vid
 
-    if vlans[0].vid > min_vid:
-        new_vlans.append({
-            'vid': min_vid,
-            'vlan_group': vlan_group,
-            'available': vlans[0].vid - min_vid,
-        })
-    if prev_vid < max_vid:
+    # Annotate any remaining available VLANs
+    if prev_vid < max_vid - 1:
         new_vlans.append({
             'vid': prev_vid + 1,
             'vlan_group': vlan_group,
-            'available': max_vid - prev_vid,
+            'available': max_vid - prev_vid - 1,
         })
+
+    return new_vlans
+
+
+def add_available_vlans(vlans, vlan_group):
+    """
+    Create fake records for all gaps between used VLANs
+    """
+    new_vlans = []
+    for vid_range in vlan_group.vid_ranges:
+        new_vlans.extend(available_vlans_from_range(vlans, vlan_group, vid_range))
 
     vlans = list(vlans) + new_vlans
     vlans.sort(key=lambda v: v.vid if type(v) is VLAN else v['vid'])

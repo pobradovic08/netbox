@@ -29,6 +29,21 @@ An alternative physical label identifying the power outlet.
 
 The type of power outlet.
 
+### Status
+
+The operational status of the power outlet. By default, the following statuses are available:
+
+* Enabled
+* Disabled
+* Faulty
+
+!!! tip "Custom power outlet statuses"
+    Additional power outlet statuses may be defined by setting `PowerOutlet.status` under the [`FIELD_CHOICES`](../../configuration/data-validation.md#field_choices) configuration parameter.
+
+### Color
+
+The power outlet's color (optional).
+
 ### Power Port
 
 When modeling a device which redistributes power from an upstream supply, such as a power distribution unit (PDU), each power outlet should be mapped to the respective [power port](./powerport.md) on the device which supplies power. For example, a 24-outlet PDU may two power ports, each distributing power to 12 of its outlets.

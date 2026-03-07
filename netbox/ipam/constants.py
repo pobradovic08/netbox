@@ -2,7 +2,6 @@ from django.db.models import Q
 
 from .choices import FHRPGroupProtocolChoices, IPAddressRoleChoices
 
-
 #
 # VRFs
 #
@@ -83,12 +82,12 @@ VLANGROUP_SCOPE_TYPES = (
 # Services
 #
 
+SERVICE_ASSIGNMENT_MODELS = Q(
+    Q(app_label='dcim', model='device') |
+    Q(app_label='ipam', model='fhrpgroup') |
+    Q(app_label='virtualization', model='virtualmachine')
+)
+
 # 16-bit port number
 SERVICE_PORT_MIN = 1
 SERVICE_PORT_MAX = 65535
-
-L2VPN_ASSIGNMENT_MODELS = Q(
-    Q(app_label='dcim', model='interface') |
-    Q(app_label='ipam', model='vlan') |
-    Q(app_label='virtualization', model='vminterface')
-)

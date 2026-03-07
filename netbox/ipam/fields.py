@@ -1,6 +1,7 @@
 from django.core.exceptions import ValidationError
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
+from django.utils.translation import gettext as _
 from netaddr import AddrFormatError, IPNetwork
 
 from . import lookups, validators
@@ -15,6 +16,7 @@ __all__ = (
 # BGP ASN bounds
 BGP_ASN_MIN = 1
 BGP_ASN_MAX = 2**32 - 1
+BGP_ASN_ASDOT_BASE = 2**16
 
 
 class BaseIPField(models.Field):
@@ -25,6 +27,9 @@ class BaseIPField(models.Field):
     def from_db_value(self, value, expression, connection):
         return self.to_python(value)
 
+    def get_internal_type(self):
+        return 'CharField'
+
     def to_python(self, value):
         if not value:
             return value
@@ -32,7 +37,7 @@ class BaseIPField(models.Field):
             # Always return a netaddr.IPNetwork object. (netaddr.IPAddress does not provide a mask.)
             return IPNetwork(value)
         except AddrFormatError:
-            raise ValidationError("Invalid IP address format: {}".format(value))
+            raise ValidationError(_("Invalid IP address format: {address}").format(address=value))
         except (TypeError, ValueError) as e:
             raise ValidationError(e)
 
@@ -56,7 +61,7 @@ class IPNetworkField(BaseIPField):
     """
     IP prefix (network and mask)
     """
-    description = "PostgreSQL CIDR field"
+    description = 'PostgreSQL CIDR field'
     default_validators = [validators.prefix_validator]
 
     def db_type(self, connection):
@@ -82,7 +87,7 @@ class IPAddressField(BaseIPField):
     """
     IP address (host address and mask)
     """
-    description = "PostgreSQL INET field"
+    description = 'PostgreSQL INET field'
 
     def db_type(self, connection):
         return 'inet'
@@ -104,10 +109,12 @@ IPAddressField.register_lookup(lookups.NetIn)
 IPAddressField.register_lookup(lookups.NetHostContained)
 IPAddressField.register_lookup(lookups.NetFamily)
 IPAddressField.register_lookup(lookups.NetMaskLength)
+IPAddressField.register_lookup(lookups.Host)
+IPAddressField.register_lookup(lookups.Inet)
 
 
 class ASNField(models.BigIntegerField):
-    description = "32-bit ASN field"
+    description = '32-bit ASN field'
     default_validators = [
         MinValueValidator(BGP_ASN_MIN),
         MaxValueValidator(BGP_ASN_MAX),
@@ -120,3 +127,16 @@ class ASNField(models.BigIntegerField):
         }
         defaults.update(**kwargs)
         return super().formfield(**defaults)
+
+    @staticmethod
+    def to_asdot(value) -> str:
+        """
+        Return ASDOT notation for AS numbers greater than 16 bits.
+        """
+        if value is None:
+            return ''
+
+        if value >= BGP_ASN_ASDOT_BASE:
+            hi, lo = divmod(value, BGP_ASN_ASDOT_BASE)
+            return f'{hi}.{lo}'
+        return str(value)

@@ -8,7 +8,7 @@ This is a mapping of models to [custom validators](../customization/custom-valid
 
 ```python
 CUSTOM_VALIDATORS = {
-    "dcim.site": [
+    "dcim.Site": [
         {
             "name": {
                 "min_length": 5,
@@ -17,11 +17,14 @@ CUSTOM_VALIDATORS = {
         },
         "my_plugin.validators.Validator1"
     ],
-    "dim.device": [
+    "dcim.Device": [
         "my_plugin.validators.Validator1"
     ]
 }
 ```
+
+!!! info "Case-Insensitive Model Names"
+    Model identifiers are case-insensitive. Both `dcim.site` and `dcim.Site` are valid and equivalent.
 
 ---
 
@@ -52,6 +55,9 @@ FIELD_CHOICES = {
     )
 }
 ```
+
+!!! info "Case-Insensitive Field Identifiers"
+    Field identifiers are case-insensitive. Both `dcim.Site.status` and `dcim.site.status` are valid and equivalent.
 
 The following model fields support configurable choices:
 
@@ -87,3 +93,27 @@ The following colors are supported:
 * `gray`
 * `black`
 * `white`
+
+---
+
+## PROTECTION_RULES
+
+!!! tip "Dynamic Configuration Parameter"
+
+This is a mapping of models to [custom validators](../customization/custom-validation.md) against which an object is evaluated immediately prior to its deletion. If validation fails, the object is not deleted. An example is provided below:
+
+```python
+PROTECTION_RULES = {
+    "dcim.Site": [
+        {
+            "status": {
+                "eq": "decommissioning"
+            }
+        },
+        "my_plugin.validators.Validator1",
+    ]
+}
+```
+
+!!! info "Case-Insensitive Model Names"
+    Model identifiers are case-insensitive. Both `dcim.site` and `dcim.Site` are valid and equivalent.

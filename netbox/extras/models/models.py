@@ -1,85 +1,182 @@
 import json
 import urllib.parse
+from pathlib import Path
 
 from django.conf import settings
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
-from django.core.cache import cache
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.postgres.fields import ArrayField
 from django.core.validators import ValidationError
 from django.db import models
-from django.http import HttpResponse
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.formats import date_format
-from django.utils.translation import gettext, gettext_lazy as _
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
+from django.utils.translation import gettext_lazy as _
 from rest_framework.utils.encoders import JSONEncoder
 
 from extras.choices import *
-from extras.conditions import ConditionSet
+from extras.conditions import ConditionSet, InvalidCondition
 from extras.constants import *
-from extras.utils import FeatureQuery, image_upload
+from extras.models.mixins import RenderTemplateMixin
+from extras.utils import image_upload
 from netbox.config import get_config
+from netbox.events import get_event_type_choices
 from netbox.models import ChangeLoggedModel
 from netbox.models.features import (
-    CloningMixin, CustomFieldsMixin, CustomLinksMixin, ExportTemplatesMixin, SyncedDataMixin, TagsMixin,
+    CloningMixin,
+    CustomFieldsMixin,
+    CustomLinksMixin,
+    ExportTemplatesMixin,
+    SyncedDataMixin,
+    TagsMixin,
+    has_feature,
 )
+from netbox.models.mixins import OwnerMixin
+from utilities.html import clean_html
+from utilities.jinja2 import render_jinja2
+from utilities.querydict import dict_to_querydict
 from utilities.querysets import RestrictedQuerySet
-from utilities.utils import clean_html, dict_to_querydict, render_jinja2
+from utilities.tables import get_table_for_model
 
 __all__ = (
     'Bookmark',
-    'ConfigRevision',
     'CustomLink',
+    'EventRule',
     'ExportTemplate',
     'ImageAttachment',
     'JournalEntry',
     'SavedFilter',
+    'TableConfig',
     'Webhook',
 )
 
 
-class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedModel):
+class EventRule(CustomFieldsMixin, ExportTemplatesMixin, OwnerMixin, TagsMixin, ChangeLoggedModel):
     """
-    A Webhook defines a request that will be sent to a remote application when an object is created, updated, and/or
-    delete in NetBox. The request will contain a representation of the object, which the remote application can act on.
-    Each Webhook can be limited to firing only on certain actions or certain object types.
+    An EventRule defines an action to be taken automatically in response to a specific set of events, such as when a
+    specific type of object is created, modified, or deleted. The action to be taken might entail transmitting a
+    webhook or executing a custom script.
     """
-    content_types = models.ManyToManyField(
-        to=ContentType,
-        related_name='webhooks',
+    object_types = models.ManyToManyField(
+        to='contenttypes.ContentType',
+        related_name='event_rules',
         verbose_name=_('object types'),
-        limit_choices_to=FeatureQuery('webhooks'),
-        help_text=_("The object(s) to which this Webhook applies.")
+        help_text=_("The object(s) to which this rule applies.")
     )
     name = models.CharField(
         verbose_name=_('name'),
         max_length=150,
         unique=True
     )
-    type_create = models.BooleanField(
-        verbose_name=_('on create'),
-        default=False,
-        help_text=_("Triggers when a matching object is created.")
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
     )
-    type_update = models.BooleanField(
-        verbose_name=_('on update'),
-        default=False,
-        help_text=_("Triggers when a matching object is updated.")
+    event_types = ArrayField(
+        base_field=models.CharField(max_length=50, choices=get_event_type_choices),
+        help_text=_("The types of event which will trigger this rule.")
     )
-    type_delete = models.BooleanField(
-        verbose_name=_('on delete'),
-        default=False,
-        help_text=_("Triggers when a matching object is deleted.")
+    enabled = models.BooleanField(
+        verbose_name=_('enabled'),
+        default=True
     )
-    type_job_start = models.BooleanField(
-        verbose_name=_('on job start'),
-        default=False,
-        help_text=_("Triggers when a job for a matching object is started.")
+    conditions = models.JSONField(
+        verbose_name=_('conditions'),
+        blank=True,
+        null=True,
+        help_text=_("A set of conditions which determine whether the event will be generated.")
     )
-    type_job_end = models.BooleanField(
-        verbose_name=_('on job end'),
-        default=False,
-        help_text=_("Triggers when a job for a matching object terminates.")
+
+    # Action to take
+    action_type = models.CharField(
+        max_length=30,
+        choices=EventRuleActionChoices,
+        default=EventRuleActionChoices.WEBHOOK,
+        verbose_name=_('action type')
+    )
+    action_object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
+        related_name='eventrule_actions',
+        on_delete=models.CASCADE
+    )
+    action_object_id = models.PositiveBigIntegerField(
+        blank=True,
+        null=True
+    )
+    action_object = GenericForeignKey(
+        ct_field='action_object_type',
+        fk_field='action_object_id'
+    )
+    action_data = models.JSONField(
+        verbose_name=_('data'),
+        blank=True,
+        null=True,
+        help_text=_("Additional data to pass to the action object")
+    )
+    comments = models.TextField(
+        verbose_name=_('comments'),
+        blank=True
+    )
+
+    class Meta:
+        ordering = ('name',)
+        indexes = (
+            models.Index(fields=('action_object_type', 'action_object_id')),
+        )
+        verbose_name = _('event rule')
+        verbose_name_plural = _('event rules')
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse('extras:eventrule', args=[self.pk])
+
+    def clean(self):
+        super().clean()
+
+        # Validate that any conditions are in the correct format
+        if self.conditions:
+            try:
+                ConditionSet(self.conditions)
+            except ValueError as e:
+                raise ValidationError({'conditions': e})
+
+    def eval_conditions(self, data):
+        """
+        Test whether the given data meets the conditions of the event rule (if any). Return True
+        if met or no conditions are specified.
+        """
+        if not self.conditions:
+            return True
+
+        logger = logging.getLogger('netbox.event_rules')
+
+        try:
+            result = ConditionSet(self.conditions).eval(data)
+            logger.debug(f'{self.name}: Evaluated as {result}')
+            return result
+        except InvalidCondition as e:
+            logger.error(f"{self.name}: Evaluation failed. {e}")
+            return False
+
+
+class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, OwnerMixin, ChangeLoggedModel):
+    """
+    A Webhook defines a request that will be sent to a remote application when an object is created, updated, and/or
+    delete in NetBox. The request will contain a representation of the object, which the remote application can act on.
+    Each Webhook can be limited to firing only on certain actions or certain object types.
+    """
+    name = models.CharField(
+        verbose_name=_('name'),
+        max_length=150,
+        unique=True
+    )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
     )
     payload_url = models.CharField(
         max_length=500,
@@ -88,10 +185,6 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
             "This URL will be called using the HTTP method defined when the webhook is called. Jinja2 template "
             "processing is supported with the same context as the request body."
         )
-    )
-    enabled = models.BooleanField(
-        verbose_name=_('enabled'),
-        default=True
     )
     http_method = models.CharField(
         max_length=30,
@@ -135,12 +228,6 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
             "digest of the payload body using the secret as the key. The secret is not transmitted in the request."
         )
     )
-    conditions = models.JSONField(
-        verbose_name=_('conditions'),
-        blank=True,
-        null=True,
-        help_text=_("A set of conditions which determine whether the webhook will be generated.")
-    )
     ssl_verification = models.BooleanField(
         default=True,
         verbose_name=_('SSL verification'),
@@ -155,15 +242,14 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
             "The specific CA certificate file to use for SSL verification. Leave blank to use the system defaults."
         )
     )
+    events = GenericRelation(
+        EventRule,
+        content_type_field='action_object_type',
+        object_id_field='action_object_id'
+    )
 
     class Meta:
         ordering = ('name',)
-        constraints = (
-            models.UniqueConstraint(
-                fields=('payload_url', 'type_create', 'type_update', 'type_delete'),
-                name='%(app_label)s_%(class)s_unique_payload_url_types'
-            ),
-        )
         verbose_name = _('webhook')
         verbose_name_plural = _('webhooks')
 
@@ -179,20 +265,6 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
 
     def clean(self):
         super().clean()
-
-        # At least one action type must be selected
-        if not any([
-            self.type_create, self.type_update, self.type_delete, self.type_job_start, self.type_job_end
-        ]):
-            raise ValidationError(
-                _("At least one event type must be selected: create, update, delete, job_start, and/or job_end.")
-            )
-
-        if self.conditions:
-            try:
-                ConditionSet(self.conditions)
-            except ValueError as e:
-                raise ValidationError({'conditions': e})
 
         # CA file path requires SSL verification enabled
         if not self.ssl_verification and self.ca_file_path:
@@ -219,8 +291,7 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
         """
         if self.body_template:
             return render_jinja2(self.body_template, context)
-        else:
-            return json.dumps(context, cls=JSONEncoder)
+        return json.dumps(context, cls=JSONEncoder)
 
     def render_payload_url(self, context):
         """
@@ -229,13 +300,13 @@ class Webhook(CustomFieldsMixin, ExportTemplatesMixin, TagsMixin, ChangeLoggedMo
         return render_jinja2(self.payload_url, context)
 
 
-class CustomLink(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
+class CustomLink(CloningMixin, ExportTemplatesMixin, OwnerMixin, ChangeLoggedModel):
     """
     A custom link to an external representation of a NetBox object. The link text and URL fields accept Jinja2 template
     code to be rendered with an object as context.
     """
-    content_types = models.ManyToManyField(
-        to=ContentType,
+    object_types = models.ManyToManyField(
+        to='contenttypes.ContentType',
         related_name='custom_links',
         help_text=_('The object type(s) to which this link applies.')
     )
@@ -280,7 +351,7 @@ class CustomLink(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     )
 
     clone_fields = (
-        'content_types', 'enabled', 'weight', 'group_name', 'button_class', 'new_window',
+        'object_types', 'enabled', 'weight', 'group_name', 'button_class', 'new_window',
     )
 
     class Meta:
@@ -315,7 +386,7 @@ class CustomLink(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         text = clean_html(text, allowed_schemes)
 
         # Sanitize link
-        link = urllib.parse.quote(link, safe='/:?&=%+[]@#,;')
+        link = urllib.parse.quote(link, safe='/:?&=%+[]@#,;!')
 
         # Verify link scheme is allowed
         result = urllib.parse.urlparse(link)
@@ -329,9 +400,16 @@ class CustomLink(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         }
 
 
-class ExportTemplate(SyncedDataMixin, CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
-    content_types = models.ManyToManyField(
-        to=ContentType,
+class ExportTemplate(
+    SyncedDataMixin,
+    CloningMixin,
+    ExportTemplatesMixin,
+    OwnerMixin,
+    ChangeLoggedModel,
+    RenderTemplateMixin,
+):
+    object_types = models.ManyToManyField(
+        to='contenttypes.ContentType',
         related_name='export_templates',
         help_text=_('The object type(s) to which this template applies.')
     )
@@ -344,32 +422,9 @@ class ExportTemplate(SyncedDataMixin, CloningMixin, ExportTemplatesMixin, Change
         max_length=200,
         blank=True
     )
-    template_code = models.TextField(
-        help_text=_(
-            "Jinja2 template code. The list of objects being exported is passed as a context variable named "
-            "<code>queryset</code>."
-        )
-    )
-    mime_type = models.CharField(
-        max_length=50,
-        blank=True,
-        verbose_name=_('MIME type'),
-        help_text=_('Defaults to <code>text/plain; charset=utf-8</code>')
-    )
-    file_extension = models.CharField(
-        verbose_name=_('file extension'),
-        max_length=15,
-        blank=True,
-        help_text=_('Extension to append to the rendered filename')
-    )
-    as_attachment = models.BooleanField(
-        verbose_name=_('as attachment'),
-        default=True,
-        help_text=_("Download file as attachment")
-    )
 
     clone_fields = (
-        'content_types', 'template_code', 'mime_type', 'file_extension', 'as_attachment',
+        'object_types', 'template_code', 'mime_type', 'file_name', 'file_extension', 'as_attachment',
     )
 
     class Meta:
@@ -402,45 +457,24 @@ class ExportTemplate(SyncedDataMixin, CloningMixin, ExportTemplatesMixin, Change
         self.template_code = self.data_file.data_as_string
     sync_data.alters_data = True
 
-    def render(self, queryset):
-        """
-        Render the contents of the template.
-        """
-        context = {
-            'queryset': queryset
+    def get_context(self, context=None, queryset=None):
+        _context = {
+            'queryset': queryset,
         }
-        output = render_jinja2(self.template_code, context)
 
-        # Replace CRLF-style line terminators
-        output = output.replace('\r\n', '\n')
+        # Apply the provided context data, if any
+        if context is not None:
+            _context.update(context)
 
-        return output
-
-    def render_to_response(self, queryset):
-        """
-        Render the template to an HTTP response, delivered as a named file attachment
-        """
-        output = self.render(queryset)
-        mime_type = 'text/plain; charset=utf-8' if not self.mime_type else self.mime_type
-
-        # Build the response
-        response = HttpResponse(output, content_type=mime_type)
-
-        if self.as_attachment:
-            basename = queryset.model._meta.verbose_name_plural.replace(' ', '_')
-            extension = f'.{self.file_extension}' if self.file_extension else ''
-            filename = f'netbox_{basename}{extension}'
-            response['Content-Disposition'] = f'attachment; filename="{filename}"'
-
-        return response
+        return _context
 
 
-class SavedFilter(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
+class SavedFilter(CloningMixin, ExportTemplatesMixin, OwnerMixin, ChangeLoggedModel):
     """
     A set of predefined keyword parameters that can be reused to filter for specific objects.
     """
-    content_types = models.ManyToManyField(
-        to=ContentType,
+    object_types = models.ManyToManyField(
+        to='contenttypes.ContentType',
         related_name='saved_filters',
         help_text=_('The object type(s) to which this filter applies.')
     )
@@ -482,7 +516,7 @@ class SavedFilter(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     )
 
     clone_fields = (
-        'content_types', 'weight', 'enabled', 'parameters',
+        'object_types', 'weight', 'enabled', 'parameters',
     )
 
     class Meta:
@@ -515,17 +549,132 @@ class SavedFilter(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
         return qd.urlencode()
 
 
+class TableConfig(CloningMixin, ChangeLoggedModel):
+    """
+    A saved configuration of columns and ordering which applies to a specific table.
+    """
+    object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
+        on_delete=models.CASCADE,
+        related_name='table_configs',
+        help_text=_("The table's object type"),
+    )
+    table = models.CharField(
+        verbose_name=_('table'),
+        max_length=100,
+    )
+    name = models.CharField(
+        verbose_name=_('name'),
+        max_length=100,
+    )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True,
+    )
+    user = models.ForeignKey(
+        to=settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+    )
+    weight = models.PositiveSmallIntegerField(
+        verbose_name=_('weight'),
+        default=1000,
+    )
+    enabled = models.BooleanField(
+        verbose_name=_('enabled'),
+        default=True
+    )
+    shared = models.BooleanField(
+        verbose_name=_('shared'),
+        default=True
+    )
+    columns = ArrayField(
+        base_field=models.CharField(max_length=100),
+    )
+    ordering = ArrayField(
+        base_field=models.CharField(max_length=100),
+        blank=True,
+        null=True,
+    )
+
+    clone_fields = ('object_type', 'table', 'enabled', 'shared', 'columns', 'ordering')
+
+    class Meta:
+        ordering = ('weight', 'name')
+        verbose_name = _('table config')
+        verbose_name_plural = _('table configs')
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse('extras:tableconfig', args=[self.pk])
+
+    @property
+    def docs_url(self):
+        return f'{settings.STATIC_URL}docs/models/extras/tableconfig/'
+
+    @property
+    def table_class(self):
+        return get_table_for_model(self.object_type.model_class(), name=self.table)
+
+    @property
+    def ordering_items(self):
+        """
+        Return a list of two-tuples indicating the column(s) by which the table is to be ordered and a boolean for each
+        column indicating whether its ordering is ascending.
+        """
+        items = []
+        for col in self.ordering or []:
+            if col.startswith('-'):
+                ascending = False
+                col = col[1:]
+            else:
+                ascending = True
+            items.append((col, ascending))
+        return items
+
+    def clean(self):
+        super().clean()
+
+        # Validate table
+        if self.table_class is None:
+            raise ValidationError({
+                'table': _("Unknown table: {name}").format(name=self.table)
+            })
+
+        table = self.table_class([])
+
+        # Validate ordering columns
+        for name in self.ordering:
+            if name.startswith('-'):
+                name = name[1:]  # Strip leading hyphen
+            if name not in table.columns:
+                raise ValidationError({
+                    'ordering': _('Unknown column: {name}').format(name=name)
+                })
+
+        # Validate selected columns
+        for name in self.columns:
+            if name not in table.columns:
+                raise ValidationError({
+                    'columns': _('Unknown column: {name}').format(name=name)
+                })
+
+
 class ImageAttachment(ChangeLoggedModel):
     """
     An uploaded image which is associated with an object.
     """
-    content_type = models.ForeignKey(
-        to=ContentType,
+    object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
         on_delete=models.CASCADE
     )
     object_id = models.PositiveBigIntegerField()
     parent = GenericForeignKey(
-        ct_field='content_type',
+        ct_field='object_type',
         fk_field='object_id'
     )
     image = models.ImageField(
@@ -544,21 +693,38 @@ class ImageAttachment(ChangeLoggedModel):
         max_length=50,
         blank=True
     )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
+    )
 
     objects = RestrictedQuerySet.as_manager()
 
-    clone_fields = ('content_type', 'object_id')
+    clone_fields = ('object_type', 'object_id')
 
     class Meta:
         ordering = ('name', 'pk')  # name may be non-unique
+        indexes = (
+            models.Index(fields=('object_type', 'object_id')),
+        )
         verbose_name = _('image attachment')
         verbose_name_plural = _('image attachments')
 
     def __str__(self):
-        if self.name:
-            return self.name
-        filename = self.image.name.rsplit('/', 1)[-1]
-        return filename.split('_', 2)[2]
+        return self.name or self.filename
+
+    def get_absolute_url(self):
+        return reverse('extras:imageattachment', args=[self.pk])
+
+    def clean(self):
+        super().clean()
+
+        # Validate the assigned object type
+        if not has_feature(self.object_type, 'image_attachments'):
+            raise ValidationError(
+                _("Image attachments cannot be assigned to this object type ({type}).").format(type=self.object_type)
+            )
 
     def delete(self, *args, **kwargs):
 
@@ -572,6 +738,24 @@ class ImageAttachment(ChangeLoggedModel):
         # Deleting the file erases its name. We restore the image's filename here in case we still need to reference it
         # before the request finishes. (For example, to display a message indicating the ImageAttachment was deleted.)
         self.image.name = _name
+
+    @property
+    def filename(self):
+        base_name = Path(self.image.name).name
+        prefix = f"{self.object_type.model}_{self.object_id}_"
+        return base_name.removeprefix(prefix)
+
+    @property
+    def html_tag(self):
+        """
+        Returns a complete <img> tag suitable for embedding in an HTML document.
+        """
+        return mark_safe('<img src="{url}" height="{height}" width="{width}" alt="{alt_text}" />'.format(
+            url=self.image.url,
+            height=self.image_height,
+            width=self.image_width,
+            alt_text=escape(self.description or self.name),
+        ))
 
     @property
     def size(self):
@@ -605,7 +789,7 @@ class JournalEntry(CustomFieldsMixin, CustomLinksMixin, TagsMixin, ExportTemplat
     might record a new journal entry when a device undergoes maintenance, or when a prefix is expanded.
     """
     assigned_object_type = models.ForeignKey(
-        to=ContentType,
+        to='contenttypes.ContentType',
         on_delete=models.CASCADE
     )
     assigned_object_id = models.PositiveBigIntegerField()
@@ -631,12 +815,18 @@ class JournalEntry(CustomFieldsMixin, CustomLinksMixin, TagsMixin, ExportTemplat
 
     class Meta:
         ordering = ('-created',)
+        indexes = (
+            models.Index(fields=('assigned_object_type', 'assigned_object_id')),
+        )
         verbose_name = _('journal entry')
         verbose_name_plural = _('journal entries')
 
     def __str__(self):
         created = timezone.localtime(self.created)
-        return f"{date_format(created, format='SHORT_DATETIME_FORMAT')} ({self.get_kind_display()})"
+        return (
+            f"{created.date().isoformat()} {created.time().isoformat(timespec='minutes')} "
+            f"({self.get_kind_display()})"
+        )
 
     def get_absolute_url(self):
         return reverse('extras:journalentry', args=[self.pk])
@@ -644,9 +834,8 @@ class JournalEntry(CustomFieldsMixin, CustomLinksMixin, TagsMixin, ExportTemplat
     def clean(self):
         super().clean()
 
-        # Prevent the creation of journal entries on unsupported models
-        permitted_types = ContentType.objects.filter(FeatureQuery('journaling').get_query())
-        if self.assigned_object_type not in permitted_types:
+        # Validate the assigned object type
+        if not has_feature(self.assigned_object_type, 'journaling'):
             raise ValidationError(
                 _("Journaling is not supported for this object type ({type}).").format(type=self.assigned_object_type)
             )
@@ -664,7 +853,7 @@ class Bookmark(models.Model):
         auto_now_add=True
     )
     object_type = models.ForeignKey(
-        to=ContentType,
+        to='contenttypes.ContentType',
         on_delete=models.PROTECT
     )
     object_id = models.PositiveBigIntegerField()
@@ -674,13 +863,16 @@ class Bookmark(models.Model):
     )
     user = models.ForeignKey(
         to=settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT
+        on_delete=models.CASCADE
     )
 
     objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('created', 'pk')
+        indexes = (
+            models.Index(fields=('object_type', 'object_id')),
+        )
         constraints = (
             models.UniqueConstraint(
                 fields=('object_type', 'object_id', 'user'),
@@ -695,58 +887,14 @@ class Bookmark(models.Model):
             return str(self.object)
         return super().__str__()
 
-
-class ConfigRevision(models.Model):
-    """
-    An atomic revision of NetBox's configuration.
-    """
-    created = models.DateTimeField(
-        verbose_name=_('created'),
-        auto_now_add=True
-    )
-    comment = models.CharField(
-        verbose_name=_('comment'),
-        max_length=200,
-        blank=True
-    )
-    data = models.JSONField(
-        blank=True,
-        null=True,
-        verbose_name=_('configuration data')
-    )
-
-    objects = RestrictedQuerySet.as_manager()
-
-    class Meta:
-        ordering = ['-created']
-        verbose_name = _('config revision')
-        verbose_name_plural = _('config revisions')
-
-    def __str__(self):
-        if not self.pk:
-            return gettext('Default configuration')
-        if self.is_active:
-            return gettext('Current configuration')
-        return gettext('Config revision #{id}').format(id=self.pk)
-
-    def __getattr__(self, item):
-        if item in self.data:
-            return self.data[item]
-        return super().__getattribute__(item)
-
     def get_absolute_url(self):
-        if not self.pk:
-            return reverse('core:config')  # Default config view
-        return reverse('extras:configrevision', args=[self.pk])
+        return reverse('account:bookmarks')
 
-    def activate(self):
-        """
-        Cache the configuration data.
-        """
-        cache.set('config', self.data, None)
-        cache.set('config_version', self.pk, None)
-    activate.alters_data = True
+    def clean(self):
+        super().clean()
 
-    @property
-    def is_active(self):
-        return cache.get('config_version') == self.pk
+        # Validate the assigned object type
+        if not has_feature(self.object_type, 'bookmarks'):
+            raise ValidationError(
+                _("Bookmarks cannot be assigned to this object type ({type}).").format(type=self.object_type)
+            )

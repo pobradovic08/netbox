@@ -1,5 +1,17 @@
-# Prefix for nested serializers
-NESTED_SERIALIZER_PREFIX = 'Nested'
+CORE_APPS = (
+    'account',
+    'circuits',
+    'core',
+    'dcim',
+    'extras',
+    'ipam',
+    'tenancy',
+    'users',
+    'utilities',
+    'virtualization',
+    'vpn',
+    'wireless',
+)
 
 # RQ queue names
 RQ_QUEUE_DEFAULT = 'default'
@@ -11,8 +23,40 @@ RQ_QUEUE_LOW = 'low'
 # When adding a new key, pick something arbitrary and unique so that it is easily searchable in
 # query logs.
 ADVISORY_LOCK_KEYS = {
+    # Available object locks
     'available-prefixes': 100100,
     'available-ips': 100200,
     'available-vlans': 100300,
     'available-asns': 100400,
+
+    # MPTT locks
+    'region': 105100,
+    'sitegroup': 105200,
+    'location': 105300,
+    'tenantgroup': 105400,
+    'contactgroup': 105500,
+    'wirelesslangroup': 105600,
+    'inventoryitem': 105700,
+    'inventoryitemtemplate': 105800,
+    'platform': 105900,
+
+    # Jobs
+    'job-schedules': 110100,
 }
+
+# TODO: Remove in NetBox v4.5
+# Legacy default view action permission mapping
+DEFAULT_ACTION_PERMISSIONS = {
+    'add': {'add'},
+    'export': {'view'},
+    'bulk_import': {'add'},
+    'bulk_edit': {'change'},
+    'bulk_delete': {'delete'},
+}
+
+# General-purpose tokens
+CENSOR_TOKEN = '********'
+CENSOR_TOKEN_CHANGED = '***CHANGED***'
+
+# Placeholder text for empty tables
+EMPTY_TABLE_TEXT = 'No results found'

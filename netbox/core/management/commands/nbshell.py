@@ -1,24 +1,48 @@
 import code
 import platform
-import sys
+from collections import defaultdict
+from types import SimpleNamespace
 
+from colorama import Fore, Style
 from django import get_version
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
 from django.core.management.base import BaseCommand
+from django.utils.module_loading import import_string
 
-APPS = ('circuits', 'core', 'dcim', 'extras', 'ipam', 'tenancy', 'users', 'virtualization', 'wireless')
+from netbox.constants import CORE_APPS
+from netbox.plugins.utils import get_installed_plugins
 
-BANNER_TEXT = """### NetBox interactive shell ({node})
-### Python {python} | Django {django} | NetBox {netbox}
-### lsmodels() will show available models. Use help(<model>) for more info.""".format(
-    node=platform.node(),
-    python=platform.python_version(),
-    django=get_version(),
-    netbox=settings.VERSION
-)
+
+def color(color: str, text: str):
+    return getattr(Fore, color.upper()) + text + Style.RESET_ALL
+
+
+def bright(text: str):
+    return Style.BRIGHT + text + Style.RESET_ALL
+
+
+def get_models(app_config):
+    """
+    Return a list of all non-private models within an app.
+    """
+    return [
+        model for model in app_config.get_models()
+        if not getattr(model, '_netbox_private', False)
+    ]
+
+
+def get_constants(app_config):
+    """
+    Return a dictionary mapping of all constants defined within an app.
+    """
+    try:
+        constants = import_string(f'{app_config.name}.constants')
+    except ImportError:
+        return {}
+    return {
+        name: value for name, value in vars(constants).items()
+    }
 
 
 class Command(BaseCommand):
@@ -31,43 +55,88 @@ class Command(BaseCommand):
             help='Python code to execute (instead of starting an interactive shell)',
         )
 
-    def _lsmodels(self):
-        for app, models in self.django_models.items():
-            app_name = apps.get_app_config(app).verbose_name
+    def _lsapps(self):
+        for app_label in self.django_models.keys():
+            app_name = apps.get_app_config(app_label).verbose_name
+            print(f'{app_label} - {app_name}')
+
+    def _lsmodels(self, app_label=None):
+        """
+        Return a list of all models within each app.
+
+        Args:
+            app_label: The name of a specific app
+        """
+        if app_label:
+            if app_label not in self.django_models:
+                print(f"No models listed for {app_label}")
+                return
+            app_labels = [app_label]
+        else:
+            app_labels = self.django_models.keys()  # All apps
+
+        for app_label in app_labels:
+            app_name = apps.get_app_config(app_label).verbose_name
             print(f'{app_name}:')
-            for m in models:
-                print(f'  {m}')
+            for model in self.django_models[app_label]:
+                print(f'  {app_label}.{model}')
 
     def get_namespace(self):
-        namespace = {}
+        namespace = defaultdict(SimpleNamespace)
 
-        # Gather Django models and constants from each app
-        for app in APPS:
-            self.django_models[app] = []
+        # Iterate through all core apps & plugins to compile namespace of models and constants
+        for app_name in [*CORE_APPS, *get_installed_plugins().keys()]:
+            app_config = apps.get_app_config(app_name)
 
-            # Load models from each app
-            for model in apps.get_app_config(app).get_models():
-                namespace[model.__name__] = model
-                self.django_models[app].append(model.__name__)
+            # Populate models
+            if models := get_models(app_config):
+                for model in models:
+                    setattr(namespace[app_name], model.__name__, model)
+                self.django_models[app_name] = sorted([
+                    model.__name__ for model in models
+                ])
 
-            # Constants
-            try:
-                app_constants = sys.modules[f'{app}.constants']
-                for name in dir(app_constants):
-                    namespace[name] = getattr(app_constants, name)
-            except KeyError:
-                pass
+            # Populate constants
+            for const_name, const_value in get_constants(app_config).items():
+                setattr(namespace[app_name], const_name, const_value)
 
-        # Additional objects to include
-        namespace['ContentType'] = ContentType
-        namespace['User'] = get_user_model()
-
-        # Load convenience commands
-        namespace.update({
+        return {
+            **namespace,
+            'lsapps': self._lsapps,
             'lsmodels': self._lsmodels,
-        })
+        }
 
-        return namespace
+    @staticmethod
+    def get_banner_text():
+        lines = [
+            '{title} ({hostname})'.format(
+                title=bright('NetBox interactive shell'),
+                hostname=platform.node(),
+            ),
+            '{python} | {django} | {netbox}'.format(
+                python=color('green', f'Python v{platform.python_version()}'),
+                django=color('green', f'Django v{get_version()}'),
+                netbox=color('green', settings.RELEASE.name),
+            ),
+        ]
+
+        if installed_plugins := get_installed_plugins():
+            plugin_list = ', '.join([
+                color('cyan', f'{name} v{version}') for name, version in installed_plugins.items()
+            ])
+            lines.append(
+                'Plugins: {plugin_list}'.format(
+                    plugin_list=plugin_list
+                )
+            )
+
+        lines.append(
+            'lsapps() & lsmodels() will show available models. Use help(<model>) for more info.'
+        )
+
+        return '\n'.join([
+            f'### {line}' for line in lines
+        ])
 
     def handle(self, **options):
         namespace = self.get_namespace()
@@ -75,7 +144,7 @@ class Command(BaseCommand):
         # If Python code has been passed, execute it and exit.
         if options['command']:
             exec(options['command'], namespace)
-            return
+            return None
 
         # Try to enable tab-complete
         try:
@@ -88,5 +157,4 @@ class Command(BaseCommand):
             readline.parse_and_bind('tab: complete')
 
         # Run interactive shell
-        shell = code.interact(banner=BANNER_TEXT, local=namespace)
-        return shell
+        return code.interact(banner=self.get_banner_text(), local=namespace)

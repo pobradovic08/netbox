@@ -1,7 +1,6 @@
-{% load i18n %}
 <form action="{{ url }}" method="post">
   {% csrf_token %}
-  <button type="submit" class="btn btn-primary btn-sm">
-    <i class="mdi mdi-sync" aria-hidden="true"></i> {% trans "Sync" %}
+  <button type="submit" class="btn btn-primary">
+    <i class="mdi mdi-sync" aria-hidden="true"></i> {{ label }}
   </button>
 </form>

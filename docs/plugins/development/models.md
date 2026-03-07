@@ -24,20 +24,7 @@ Every model includes by default a numeric primary key. This value is generated a
 
 ## Enabling NetBox Features
 
-Plugin models can leverage certain NetBox features by inheriting from NetBox's `NetBoxModel` class. This class extends the plugin model to enable features unique to NetBox, including:
-
-* Bookmarks
-* Change logging
-* Cloning
-* Custom fields
-* Custom links
-* Custom validation
-* Export templates
-* Journaling
-* Tags
-* Webhooks
-
-This class performs two crucial functions:
+Plugin models can leverage certain [model features](../../development/models.md#features-matrix) (such as tags, custom fields, event rules, etc.) by inheriting from NetBox's `NetBoxModel` class. This class performs two crucial functions:
 
 1. Apply any fields, methods, and/or attributes necessary to the operation of these features
 2. Register the model with NetBox as utilizing these features
@@ -60,6 +47,10 @@ class MyModel(NetBoxModel):
 
 This attribute specifies the URL at which the documentation for this model can be reached. By default, it will return `/static/docs/models/<app_label>/<model_name>/`. Plugin models can override this to return a custom URL. For example, you might direct the user to your plugin's documentation hosted on [ReadTheDocs](https://readthedocs.org/).
 
+#### `_netbox_private`
+
+By default, any model introduced by a plugin will appear in the list of available object types e.g. when creating a custom field or certain dashboard widgets. If your model is intended only for "behind the scenes use" and should not be exposed to end users, set `_netbox_private` to True. This will omit it from the list of general-purpose object types.
+
 ### Enabling Features Individually
 
 If you prefer instead to enable only a subset of these features for a plugin model, NetBox provides a discrete "mix-in" class for each feature. You can subclass each of these individually when defining your model. (Your model will also need to inherit from Django's built-in `Model` class.)
@@ -75,6 +66,46 @@ class MyModel(ExportTemplatesMixin, TagsMixin, models.Model):
     foo = models.CharField()
     ...
 ```
+
+### Additional Models
+
+In addition to the base NetBoxModel class, the following additional classes are provided for convenience.
+
+!!! info "These model classes were added to the plugins API in NetBox v4.5."
+
+#### PrimaryModel
+
+PrimaryModel is the go-to class for most object types. It extends NetBoxModel with `description` and `comments` fields, and it introduces support for ownership assignment.
+
+| Field         | Required | Unique | Description                                 |
+|---------------|----------|--------|---------------------------------------------|
+| `owner`       | No       | No     | The object's owner                          |
+| `description` | No       | No     | A human-friendly description for the object |
+| `comments`    | No       | No     | General comments                            |
+
+#### OrganizationalModel
+
+OrganizationalModel is used by object types whose function is primarily the organization of other objects.
+
+| Field         | Required | Unique | Description                                 |
+|---------------|----------|--------|---------------------------------------------|
+| `name`        | Yes      | Yes    | The name of the object                      |
+| `slug`        | Yes      | Yes    | A unique URL-friendly identifier            |
+| `owner`       | No       | No     | The object's owner                          |
+| `description` | No       | No     | A human-friendly description for the object |
+
+#### NestedGroupModel
+
+NestedGroupModel is used for objects which arrange into a recursive hierarchy (like regions and locations) via its self-referential `parent` foreign key.
+
+| Field         | Required | Unique | Description                                                     |
+|---------------|----------|--------|-----------------------------------------------------------------|
+| `name`        | Yes      | Yes    | The name of the object                                          |
+| `slug`        | Yes      | Yes    | A unique URL-friendly identifier                                |
+| `parent`      | No       | No     | The object (of the same type) under which this object is nested |
+| `owner`       | No       | No     | The object's owner                                              |
+| `description` | No       | No     | A human-friendly description for the object                     |
+| `comments`    | No       | No     | General comments                                                |
 
 ## Database Migrations
 
@@ -113,19 +144,44 @@ For more information about database migrations, see the [Django documentation](h
 
 ::: netbox.models.features.CloningMixin
 
+::: netbox.models.features.ContactsMixin
+
 ::: netbox.models.features.CustomLinksMixin
 
 ::: netbox.models.features.CustomFieldsMixin
 
 ::: netbox.models.features.CustomValidationMixin
 
+::: netbox.models.features.EventRulesMixin
+
 ::: netbox.models.features.ExportTemplatesMixin
+
+::: netbox.models.features.JobsMixin
 
 ::: netbox.models.features.JournalingMixin
 
 ::: netbox.models.features.TagsMixin
 
-::: netbox.models.features.WebhooksMixin
+## Custom Model Features
+
+In addition to utilizing the model features provided natively by NetBox (listed above), plugins can register their own model features. This is done using the `register_model_feature()` function from `netbox.utils`. This function takes two arguments: a feature name, and a callable which accepts a model class. The callable must return a boolean value indicting whether the given model supports the named feature.
+
+This function can be used as a decorator:
+
+```python
+@register_model_feature('foo')
+def supports_foo(model):
+    # Your logic here
+```
+
+Or it can be called directly:
+
+```python
+register_model_feature('foo', supports_foo)
+```
+
+!!! tip
+    Consider performing feature registration inside your PluginConfig's `ready()` method.
 
 ## Choice Sets
 

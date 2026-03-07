@@ -7,13 +7,14 @@ from django import forms
 from django.utils.translation import gettext as _
 
 from core.forms.mixins import SyncedDataMixin
-from utilities.choices import CSVDelimiterChoices, ImportFormatChoices, ImportMethodChoices
+from netbox.choices import CSVDelimiterChoices, ImportFormatChoices, ImportMethodChoices
+from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.constants import CSV_DELIMITERS
+from utilities.forms.mixins import BackgroundJobMixin
 from utilities.forms.utils import parse_csv
-from .mixins import BootstrapMixin
 
 
-class BulkImportForm(BootstrapMixin, SyncedDataMixin, forms.Form):
+class BulkImportForm(ChangelogMessageMixin, BackgroundJobMixin, SyncedDataMixin, forms.Form):
     import_method = forms.ChoiceField(
         choices=ImportMethodChoices,
         required=False
@@ -49,7 +50,7 @@ class BulkImportForm(BootstrapMixin, SyncedDataMixin, forms.Form):
 
         # Determine whether we're reading from form data or an uploaded file
         if self.cleaned_data['data'] and import_method != ImportMethodChoices.DIRECT:
-            raise forms.ValidationError("Form data must be empty when uploading/selecting a file.")
+            raise forms.ValidationError(_("Form data must be empty when uploading/selecting a file."))
         if import_method == ImportMethodChoices.UPLOAD:
             self.upload_file = 'upload_file'
             file = self.files.get('upload_file')
@@ -78,7 +79,7 @@ class BulkImportForm(BootstrapMixin, SyncedDataMixin, forms.Form):
         elif format == ImportFormatChoices.YAML:
             self.cleaned_data['data'] = self._clean_yaml(data)
         else:
-            raise forms.ValidationError(f"Unknown data format: {format}")
+            raise forms.ValidationError(_("Unknown data format: {format}").format(format=format))
 
     def _detect_format(self, data):
         """
@@ -114,7 +115,7 @@ class BulkImportForm(BootstrapMixin, SyncedDataMixin, forms.Form):
                 dialect = csv.Sniffer().sniff(data.strip(), delimiters=delimiters)
             except csv.Error:
                 dialect = csv.excel
-        elif delimiter in (CSVDelimiterChoices.COMMA, CSVDelimiterChoices.SEMICOLON):
+        elif delimiter in (CSVDelimiterChoices.COMMA, CSVDelimiterChoices.SEMICOLON, CSVDelimiterChoices.PIPE):
             dialect = csv.excel
             dialect.delimiter = delimiter
         elif delimiter == CSVDelimiterChoices.TAB:

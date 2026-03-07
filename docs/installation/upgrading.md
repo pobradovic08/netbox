@@ -17,18 +17,37 @@ Prior to upgrading your NetBox instance, be sure to carefully review all [releas
 
 NetBox requires the following dependencies:
 
-| Dependency | Minimum Version |
-|------------|-----------------|
-| Python     | 3.8             |
-| PostgreSQL | 12              |
-| Redis      | 4.0             |
+| Dependency | Supported Versions |
+|------------|--------------------|
+| Python     | 3.12, 3.13, 3.14   |
+| PostgreSQL | 14+                |
+| Redis      | 4.0+               |
+
+### Version History
+
+| NetBox Version | Python min | Python max | PostgreSQL min | Redis min |                                       Documentation                                       |
+|:--------------:|:----------:|:----------:|:--------------:|:---------:|:-----------------------------------------------------------------------------------------:|
+|      4.5       |    3.12    |    3.14    |       14       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.5.0/docs/installation/index.md) |
+|      4.4       |    3.10    |    3.12    |       14       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.4.0/docs/installation/index.md) |
+|      4.3       |    3.10    |    3.12    |       14       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.3.0/docs/installation/index.md) |
+|      4.2       |    3.10    |    3.12    |       13       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.2.0/docs/installation/index.md) |
+|      4.1       |    3.10    |    3.12    |       12       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.1.0/docs/installation/index.md) |
+|      4.0       |    3.10    |    3.12    |       12       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v4.0.0/docs/installation/index.md) |
+|      3.7       |    3.8     |    3.11    |       12       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.7.0/docs/installation/index.md) |
+|      3.6       |    3.8     |    3.11    |       12       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.6.0/docs/installation/index.md) |
+|      3.5       |    3.8     |    3.10    |       11       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.5.0/docs/installation/index.md) |
+|      3.4       |    3.8     |    3.10    |       11       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.4.0/docs/installation/index.md) |
+|      3.3       |    3.8     |    3.10    |       10       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.3.0/docs/installation/index.md) |
+|      3.2       |    3.8     |    3.10    |       10       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.2.0/docs/installation/index.md) |
+|      3.1       |    3.7     |    3.9     |       10       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.1.0/docs/installation/index.md) |
+|      3.0       |    3.7     |    3.9     |      9.6       |    4.0    | [Link](https://github.com/netbox-community/netbox/blob/v3.0.0/docs/installation/index.md) |
 
 ## 3. Install the Latest Release
 
-As with the initial installation, you can upgrade NetBox by either downloading the latest release package or by cloning the `master` branch of the git repository. 
+As with the initial installation, you can upgrade NetBox by either downloading the latest release package or by checking out the latest production release from the git repository.
 
 !!! warning
-    Use the same method as you used to install NetBox originally
+    Use the same method as you used to install NetBox originally.
 
 If you are not sure how NetBox was installed originally, check with this command:
 
@@ -36,10 +55,7 @@ If you are not sure how NetBox was installed originally, check with this command
 ls -ld /opt/netbox /opt/netbox/.git
 ```
 
-If NetBox was installed from a release package, then `/opt/netbox` will be a
-symlink pointing to the current version, and `/opt/netbox/.git` will not
-exist.  If it was installed from git, then `/opt/netbox` and
-`/opt/netbox/.git` will both exist as normal directories.
+If NetBox was installed from a release package, then `/opt/netbox` will be a symlink pointing to the current version, and `/opt/netbox/.git` will not exist.  If it was installed from git, then `/opt/netbox` and `/opt/netbox/.git` will both exist as normal directories.
 
 ### Option A: Download a Release
 
@@ -49,7 +65,7 @@ Download and extract the latest version:
 
 ```no-highlight
 # Set $NEWVER to the NetBox version being installed
-NEWVER=3.5.0
+NEWVER=4.5.0
 wget https://github.com/netbox-community/netbox/archive/v$NEWVER.tar.gz
 sudo tar -xzf v$NEWVER.tar.gz -C /opt
 sudo ln -sfn /opt/netbox-$NEWVER/ /opt/netbox
@@ -59,7 +75,7 @@ Copy `local_requirements.txt`, `configuration.py`, and `ldap_config.py` (if pres
 
 ```no-highlight
 # Set $OLDVER to the NetBox version currently installed
-OLDVER=3.4.9
+OLDVER=4.4.10
 sudo cp /opt/netbox-$OLDVER/local_requirements.txt /opt/netbox/
 sudo cp /opt/netbox-$OLDVER/netbox/netbox/configuration.py /opt/netbox/netbox/netbox/
 sudo cp /opt/netbox-$OLDVER/netbox/netbox/ldap_config.py /opt/netbox/netbox/netbox/
@@ -84,20 +100,24 @@ If you followed the original installation guide to set up gunicorn, be sure to c
 sudo cp /opt/netbox-$OLDVER/gunicorn.py /opt/netbox/
 ```
 
-### Option B: Clone the Git Repository
+### Option B: Check Out a Git Release
 
-This guide assumes that NetBox is installed at `/opt/netbox`. Pull down the most recent iteration of the master branch:
+This guide assumes that NetBox is installed in `/opt/netbox`. First, determine the latest release either by visiting our [releases page](https://github.com/netbox-community/netbox/releases) or by running the following command:
 
-```no-highlight
-cd /opt/netbox
-sudo git checkout master
-sudo git pull origin master
+```
+git ls-remote --tags https://github.com/netbox-community/netbox.git \
+  | grep -o 'refs/tags/v[0-9]*\.[0-9]*\.[0-9]*$' \
+  | tail -n 1 \
+  | sed 's|refs/tags/||'
 ```
 
-!!! info "Checking out an older release"
-    If you need to upgrade to an older version rather than the current stable release, you can check out any valid [git tag](https://github.com/netbox-community/netbox/tags), each of which represents a release. For example, to checkout the code for NetBox v2.11.11, do:
+Check out the desired release by specifying its tag. For example:
 
-        sudo git checkout v2.11.11
+```
+cd /opt/netbox && \
+sudo git fetch --tags && \
+sudo git checkout v4.5.0
+```
 
 ## 4. Run the Upgrade Script
 
@@ -108,11 +128,14 @@ sudo ./upgrade.sh
 ```
 
 !!! warning
-    If the default version of Python is not at least 3.8, you'll need to pass the path to a supported Python version as an environment variable when calling the upgrade script. For example:
+    If the default version of Python is not **at least 3.12**, you'll need to pass the path to a supported Python version as an environment variable when calling the upgrade script. For example:
 
     ```no-highlight
-    sudo PYTHON=/usr/bin/python3.8 ./upgrade.sh
+    sudo PYTHON=/usr/bin/python3.12 ./upgrade.sh
     ```
+
+!!! note
+    To run the script on a node connected to a database in read-only mode, include the `--readonly` parameter. This will skip the application of any database migrations.
 
 This script performs the following actions:
 
@@ -140,13 +163,3 @@ Finally, restart the gunicorn and RQ services:
 ```no-highlight
 sudo systemctl restart netbox netbox-rq
 ```
-
-## 6. Verify Housekeeping Scheduling
-
-If upgrading from a release prior to NetBox v3.0, check that a cron task (or similar scheduled process) has been configured to run NetBox's nightly housekeeping command. A shell script which invokes this command is included at `contrib/netbox-housekeeping.sh`. It can be linked from your system's daily cron task directory, or included within the crontab directly. (If NetBox has been installed in a nonstandard path, be sure to update the system paths within this script first.)
-
-```shell
-sudo ln -s /opt/netbox/contrib/netbox-housekeeping.sh /etc/cron.daily/netbox-housekeeping
-```
-
-See the [housekeeping documentation](../administration/housekeeping.md) for further details.

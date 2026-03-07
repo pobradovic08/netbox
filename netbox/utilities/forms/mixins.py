@@ -1,68 +1,119 @@
 import time
+from decimal import Decimal
 
 from django import forms
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.utils.translation import gettext_lazy as _
 
-from .widgets import APISelect, APISelectMultiple, ClearableFileInput
+from netbox.registry import registry
+from utilities.forms.fields import ColorField, QueryField, TagFilterField
+from utilities.forms.widgets import FilterModifierWidget
+from utilities.forms.widgets.modifiers import MODIFIER_EMPTY_FALSE, MODIFIER_EMPTY_TRUE
 
 __all__ = (
-    'BootstrapMixin',
+    'FORM_FIELD_LOOKUPS',
+    'BackgroundJobMixin',
     'CheckLastUpdatedMixin',
+    'DistanceValidationMixin',
+    'FilterModifierMixin',
 )
 
 
-class BootstrapMixin:
-    """
-    Add the base Bootstrap CSS classes to form elements.
-    """
+# Mapping of form field types to their supported lookups
+FORM_FIELD_LOOKUPS = {
+    QueryField: [],
+    forms.BooleanField: [],
+    forms.NullBooleanField: [],
+    forms.CharField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        ('ic', _('contains')),
+        ('isw', _('starts with')),
+        ('iew', _('ends with')),
+        ('ie', _('equals (case-insensitive)')),
+        ('regex', _('matches pattern')),
+        ('iregex', _('matches pattern (case-insensitive)')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.IntegerField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        ('gt', _('greater than')),
+        ('gte', _('at least')),
+        ('lt', _('less than')),
+        ('lte', _('at most')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.DecimalField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        ('gt', _('greater than')),
+        ('gte', _('at least')),
+        ('lt', _('less than')),
+        ('lte', _('at most')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.DateField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        ('gt', _('after')),
+        ('gte', _('on or after')),
+        ('lt', _('before')),
+        ('lte', _('on or before')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.ModelChoiceField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    ColorField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    TagFilterField: [
+        ('exact', _('has these tags')),
+        ('n', _('does not have these tags')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.ChoiceField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+    forms.MultipleChoiceField: [
+        ('exact', _('is')),
+        ('n', _('is not')),
+        (MODIFIER_EMPTY_TRUE, _('is empty')),
+        (MODIFIER_EMPTY_FALSE, _('is not empty')),
+    ],
+}
+
+
+class BackgroundJobMixin(forms.Form):
+    background_job = forms.BooleanField(
+        label=_('Background job'),
+        help_text=_("Execute this task via a background job"),
+        required=False,
+    )
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        exempt_widgets = [
-            forms.FileInput,
-            forms.RadioSelect,
-            APISelect,
-            APISelectMultiple,
-            ClearableFileInput,
-        ]
-
-        for field_name, field in self.fields.items():
-            css = field.widget.attrs.get('class', '')
-
-            if field.widget.__class__ in exempt_widgets:
-                continue
-
-            elif isinstance(field.widget, forms.CheckboxInput):
-                field.widget.attrs['class'] = f'{css} form-check-input'
-
-            elif isinstance(field.widget, forms.SelectMultiple) and 'size' in field.widget.attrs:
-                # Use native Bootstrap class for multi-line <select> widgets
-                field.widget.attrs['class'] = f'{css} form-select form-select-sm'
-
-            elif isinstance(field.widget, (forms.Select, forms.SelectMultiple)):
-                field.widget.attrs['class'] = f'{css} netbox-static-select'
-
-            else:
-                field.widget.attrs['class'] = f'{css} form-control'
-
-            if field.required and not isinstance(field.widget, forms.FileInput):
-                field.widget.attrs['required'] = 'required'
-
-            if 'placeholder' not in field.widget.attrs and field.label is not None:
-                field.widget.attrs['placeholder'] = field.label
-
-    def is_valid(self):
-        is_valid = super().is_valid()
-
-        # Apply is-invalid CSS class to fields with errors
-        if not is_valid:
-            for field_name in self.errors:
-                # Ignore e.g. __all__
-                if field := self.fields.get(field_name):
-                    css = field.widget.attrs.get('class', '')
-                    field.widget.attrs['class'] = f'{css} is-invalid'
-
-        return is_valid
+        # Declare background_job a meta field
+        if hasattr(self, 'meta_fields'):
+            self.meta_fields.append('background_job')
+        else:
+            self.meta_fields = ['background_job']
 
 
 class CheckLastUpdatedMixin(forms.Form):
@@ -101,3 +152,78 @@ class CheckLastUpdatedMixin(forms.Form):
                 "This object has been modified since the form was rendered. Please consult the object's change "
                 "log for details."
             ))
+
+
+class DistanceValidationMixin(forms.Form):
+    distance = forms.DecimalField(
+        required=False,
+        validators=[
+            MinValueValidator(Decimal(0)),
+            MaxValueValidator(Decimal(100000)),
+        ]
+    )
+
+
+class FilterModifierMixin:
+    """
+    Mixin that enhances filter form fields with lookup modifier dropdowns.
+
+    Automatically detects fields that could benefit from multiple lookup options
+    and wraps their widgets with FilterModifierWidget.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._enhance_fields_with_modifiers()
+
+    def _enhance_fields_with_modifiers(self):
+        """Wrap compatible field widgets with FilterModifierWidget."""
+
+        model = getattr(self, 'model', None)
+        if model is None and hasattr(self, '_meta'):
+            model = getattr(self._meta, 'model', None)
+
+        filterset_class = None
+        if model:
+            key = f'{model._meta.app_label}.{model._meta.model_name}'
+            filterset_class = registry['filtersets'].get(key)
+
+        filterset = filterset_class() if filterset_class else None
+
+        for field_name, field in self.fields.items():
+            lookups = self._get_lookup_choices(field)
+
+            if filterset:
+                lookups = self._verify_lookups_with_filterset(field_name, lookups, filterset)
+
+                if len(lookups) > 1:
+                    field.widget = FilterModifierWidget(
+                        widget=field.widget,
+                        lookups=lookups
+                    )
+
+    def _get_lookup_choices(self, field):
+        """Determine the available lookup choices for a given field.
+
+        Returns an empty list for fields that should not be enhanced.
+        """
+        for field_class in field.__class__.__mro__:
+            if field_lookups := FORM_FIELD_LOOKUPS.get(field_class):
+                return field_lookups
+
+        return []
+
+    def _verify_lookups_with_filterset(self, field_name, lookups, filterset):
+        """Verify which lookups are actually supported by the FilterSet."""
+        verified_lookups = []
+
+        for lookup_code, lookup_label in lookups:
+            if lookup_code in (MODIFIER_EMPTY_TRUE, MODIFIER_EMPTY_FALSE):
+                filter_key = f'{field_name}__empty'
+            else:
+                filter_key = f'{field_name}__{lookup_code}' if lookup_code != 'exact' else field_name
+
+            if filter_key in filterset.filters:
+                verified_lookups.append((lookup_code, lookup_label))
+
+        return verified_lookups

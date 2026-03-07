@@ -1,7 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 
 from dcim.choices import *
@@ -9,6 +8,7 @@ from netbox.config import ConfigItem
 from netbox.models import PrimaryModel
 from netbox.models.features import ContactsMixin, ImageAttachmentsMixin
 from utilities.validators import ExclusionValidator
+
 from .device_components import CabledObjectModel, PathEndpoint
 
 __all__ = (
@@ -37,7 +37,8 @@ class PowerPanel(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=100
+        max_length=100,
+        db_collation="natural_sort"
     )
 
     prerequisite_models = (
@@ -57,9 +58,6 @@ class PowerPanel(ContactsMixin, ImageAttachmentsMixin, PrimaryModel):
 
     def __str__(self):
         return self.name
-
-    def get_absolute_url(self):
-        return reverse('dcim:powerpanel', args=[self.pk])
 
     def clean(self):
         super().clean()
@@ -84,12 +82,14 @@ class PowerFeed(PrimaryModel, PathEndpoint, CabledObjectModel):
     rack = models.ForeignKey(
         to='Rack',
         on_delete=models.PROTECT,
+        related_name='powerfeeds',
         blank=True,
         null=True
     )
     name = models.CharField(
         verbose_name=_('name'),
-        max_length=100
+        max_length=100,
+        db_collation="natural_sort"
     )
     status = models.CharField(
         verbose_name=_('status'),
@@ -166,16 +166,13 @@ class PowerFeed(PrimaryModel, PathEndpoint, CabledObjectModel):
     def __str__(self):
         return self.name
 
-    def get_absolute_url(self):
-        return reverse('dcim:powerfeed', args=[self.pk])
-
     def clean(self):
         super().clean()
 
         # Rack must belong to same Site as PowerPanel
         if self.rack and self.rack.site != self.power_panel.site:
             raise ValidationError(_(
-                "Rack {rack} ({site}) and power panel {powerpanel} ({powerpanel_site}) are in different sites"
+                "Rack {rack} ({rack_site}) and power panel {powerpanel} ({powerpanel_site}) are in different sites."
             ).format(
                 rack=self.rack,
                 rack_site=self.rack.site,

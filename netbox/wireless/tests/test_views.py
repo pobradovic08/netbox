@@ -1,9 +1,12 @@
-from wireless.choices import *
-from wireless.models import *
+from django.contrib.contenttypes.models import ContentType
+
 from dcim.choices import InterfaceTypeChoices, LinkStatusChoices
-from dcim.models import Interface
+from dcim.models import Interface, Site
+from netbox.choices import DistanceUnitChoices
 from tenancy.models import Tenant
 from utilities.testing import ViewTestCases, create_tags, create_test_device
+from wireless.choices import *
+from wireless.models import *
 
 
 class WirelessLANGroupTestCase(ViewTestCases.OrganizationalObjectViewTestCase):
@@ -14,7 +17,9 @@ class WirelessLANGroupTestCase(ViewTestCases.OrganizationalObjectViewTestCase):
 
         groups = (
             WirelessLANGroup(name='Wireless LAN Group 1', slug='wireless-lan-group-1'),
-            WirelessLANGroup(name='Wireless LAN Group 2', slug='wireless-lan-group-2'),
+            WirelessLANGroup(
+                name='Wireless LAN Group 2', slug='wireless-lan-group-2', comments='LAN Group 2 comment',
+            ),
             WirelessLANGroup(name='Wireless LAN Group 3', slug='wireless-lan-group-3'),
         )
         for group in groups:
@@ -28,24 +33,26 @@ class WirelessLANGroupTestCase(ViewTestCases.OrganizationalObjectViewTestCase):
             'parent': groups[2].pk,
             'description': 'A new wireless LAN group',
             'tags': [t.pk for t in tags],
+            'comments': 'LAN Group X comment',
         }
 
         cls.csv_data = (
-            "name,slug,description",
-            "Wireless LAN Group 4,wireless-lan-group-4,Fourth wireless LAN group",
-            "Wireless LAN Group 5,wireless-lan-group-5,Fifth wireless LAN group",
-            "Wireless LAN Group 6,wireless-lan-group-6,Sixth wireless LAN group",
+            "name,slug,description,comments",
+            "Wireless LAN Group 4,wireless-lan-group-4,Fourth wireless LAN group,",
+            "Wireless LAN Group 5,wireless-lan-group-5,Fifth wireless LAN group,",
+            "Wireless LAN Group 6,wireless-lan-group-6,Sixth wireless LAN group,LAN Group 6 comment",
         )
 
         cls.csv_update_data = (
-            "id,name,description",
-            f"{groups[0].pk},Wireless LAN Group 7,Fourth wireless LAN group7",
-            f"{groups[1].pk},Wireless LAN Group 8,Fifth wireless LAN group8",
-            f"{groups[2].pk},Wireless LAN Group 0,Sixth wireless LAN group9",
+            "id,name,description,comments",
+            f"{groups[0].pk},Wireless LAN Group 7,Fourth wireless LAN group7,Group 7 comment",
+            f"{groups[1].pk},Wireless LAN Group 8,Fifth wireless LAN group8,",
+            f"{groups[2].pk},Wireless LAN Group 0,Sixth wireless LAN group9,",
         )
 
         cls.bulk_edit_data = {
             'description': 'New description',
+            'comments': 'New Comments',
         }
 
 
@@ -54,6 +61,12 @@ class WirelessLANTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+
+        sites = (
+            Site(name='Site 1', slug='site-1'),
+            Site(name='Site 2', slug='site-2'),
+        )
+        Site.objects.bulk_create(sites)
 
         tenants = (
             Tenant(name='Tenant 1', slug='tenant-1'),
@@ -97,19 +110,32 @@ class WirelessLANTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'ssid': 'WLAN2',
             'group': groups[1].pk,
             'status': WirelessLANStatusChoices.STATUS_DISABLED,
+            'scope_type': ContentType.objects.get_for_model(Site).pk,
+            'scope': sites[1].pk,
             'tenant': tenants[1].pk,
             'tags': [t.pk for t in tags],
         }
 
         cls.csv_data = (
-            f"group,ssid,status,tenant",
-            f"Wireless LAN Group 2,WLAN4,{WirelessLANStatusChoices.STATUS_ACTIVE},{tenants[0].name}",
-            f"Wireless LAN Group 2,WLAN5,{WirelessLANStatusChoices.STATUS_DISABLED},{tenants[1].name}",
-            f"Wireless LAN Group 2,WLAN6,{WirelessLANStatusChoices.STATUS_RESERVED},{tenants[2].name}",
+            "group,ssid,status,tenant,scope_type,scope_id",
+            "Wireless LAN Group 2,WLAN4,{status},{tenant},,".format(
+                status=WirelessLANStatusChoices.STATUS_ACTIVE,
+                tenant=tenants[0].name
+            ),
+            "Wireless LAN Group 2,WLAN5,{status},{tenant},dcim.site,{site}".format(
+                status=WirelessLANStatusChoices.STATUS_DISABLED,
+                tenant=tenants[1].name,
+                site=sites[0].pk
+            ),
+            "Wireless LAN Group 2,WLAN6,{status},{tenant},dcim.site,{site}".format(
+                status=WirelessLANStatusChoices.STATUS_RESERVED,
+                tenant=tenants[2].name,
+                site=sites[1].pk
+            ),
         )
 
         cls.csv_update_data = (
-            f"id,ssid",
+            "id,ssid",
             f"{wireless_lans[0].pk},WLAN7",
             f"{wireless_lans[1].pk},WLAN8",
             f"{wireless_lans[2].pk},WLAN9",
@@ -147,11 +173,17 @@ class WirelessLinkTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         ]
         Interface.objects.bulk_create(interfaces)
 
-        wirelesslink1 = WirelessLink(interface_a=interfaces[0], interface_b=interfaces[1], ssid='LINK1', tenant=tenants[0])
+        wirelesslink1 = WirelessLink(
+            interface_a=interfaces[0], interface_b=interfaces[1], ssid='LINK1', tenant=tenants[0]
+        )
         wirelesslink1.save()
-        wirelesslink2 = WirelessLink(interface_a=interfaces[2], interface_b=interfaces[3], ssid='LINK2', tenant=tenants[0])
+        wirelesslink2 = WirelessLink(
+            interface_a=interfaces[2], interface_b=interfaces[3], ssid='LINK2', tenant=tenants[0]
+        )
         wirelesslink2.save()
-        wirelesslink3 = WirelessLink(interface_a=interfaces[4], interface_b=interfaces[5], ssid='LINK3', tenant=tenants[0])
+        wirelesslink3 = WirelessLink(
+            interface_a=interfaces[4], interface_b=interfaces[5], ssid='LINK3', tenant=tenants[0]
+        )
         wirelesslink3.save()
 
         tags = create_tags('Alpha', 'Bravo', 'Charlie')
@@ -160,15 +192,17 @@ class WirelessLinkTestCase(ViewTestCases.PrimaryObjectViewTestCase):
             'interface_a': interfaces[6].pk,
             'interface_b': interfaces[7].pk,
             'status': LinkStatusChoices.STATUS_PLANNED,
+            'distance': 100,
+            'distance_unit': DistanceUnitChoices.UNIT_FOOT,
             'tenant': tenants[1].pk,
             'tags': [t.pk for t in tags],
         }
 
         cls.csv_data = (
-            f"interface_a,interface_b,status,tenant",
-            f"{interfaces[6].pk},{interfaces[7].pk},connected,{tenants[0].name}",
-            f"{interfaces[8].pk},{interfaces[9].pk},connected,{tenants[1].name}",
-            f"{interfaces[10].pk},{interfaces[11].pk},connected,{tenants[2].name}",
+            "device_a,interface_a,device_b,interface_b,status,tenant",
+            f"{interfaces[6].device.name},{interfaces[6].name},{interfaces[7].device.name},{interfaces[7].name},connected,{tenants[0].name}",
+            f"{interfaces[8].device.name},{interfaces[8].name},{interfaces[9].device.name},{interfaces[9].name},connected,{tenants[1].name}",
+            f"{interfaces[10].device.name},{interfaces[10].name},{interfaces[11].device.name},{interfaces[11].name},connected,{tenants[2].name}",
         )
 
         cls.csv_update_data = (
@@ -180,4 +214,6 @@ class WirelessLinkTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 
         cls.bulk_edit_data = {
             'status': LinkStatusChoices.STATUS_PLANNED,
+            'distance': 50,
+            'distance_unit': DistanceUnitChoices.UNIT_METER,
         }

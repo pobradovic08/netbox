@@ -1,12 +1,13 @@
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from mptt.models import MPTTModel
 
 from dcim.choices import LinkStatusChoices
 from dcim.constants import WIRELESS_IFACE_TYPES
+from dcim.models.mixins import CachedScopeMixin
 from netbox.models import NestedGroupModel, PrimaryModel
+from netbox.models.mixins import DistanceMixin
+
 from .choices import *
 from .constants import *
 
@@ -25,13 +26,15 @@ class WirelessAuthenticationBase(models.Model):
         max_length=50,
         choices=WirelessAuthTypeChoices,
         blank=True,
+        null=True,
         verbose_name=_("authentication type"),
     )
     auth_cipher = models.CharField(
         verbose_name=_('authentication cipher'),
         max_length=50,
         choices=WirelessAuthCipherChoices,
-        blank=True
+        blank=True,
+        null=True
     )
     auth_psk = models.CharField(
         max_length=PSK_MAX_LENGTH,
@@ -50,7 +53,8 @@ class WirelessLANGroup(NestedGroupModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,
-        unique=True
+        unique=True,
+        db_collation="natural_sort"
     )
     slug = models.SlugField(
         verbose_name=_('slug'),
@@ -60,6 +64,9 @@ class WirelessLANGroup(NestedGroupModel):
 
     class Meta:
         ordering = ('name', 'pk')
+        # Empty tuple triggers Django migration detection for MPTT indexes
+        # (see #21016, django-mptt/django-mptt#682)
+        indexes = ()
         constraints = (
             models.UniqueConstraint(
                 fields=('parent', 'name'),
@@ -69,11 +76,8 @@ class WirelessLANGroup(NestedGroupModel):
         verbose_name = _('wireless LAN group')
         verbose_name_plural = _('wireless LAN groups')
 
-    def get_absolute_url(self):
-        return reverse('wireless:wirelesslangroup', args=[self.pk])
 
-
-class WirelessLAN(WirelessAuthenticationBase, PrimaryModel):
+class WirelessLAN(WirelessAuthenticationBase, CachedScopeMixin, PrimaryModel):
     """
     A wireless network formed among an arbitrary number of access point and clients.
     """
@@ -109,43 +113,35 @@ class WirelessLAN(WirelessAuthenticationBase, PrimaryModel):
         null=True
     )
 
-    clone_fields = ('ssid', 'group', 'tenant', 'description')
+    clone_fields = ('ssid', 'group', 'scope_type', 'scope_id', 'tenant', 'description')
 
     class Meta:
         ordering = ('ssid', 'pk')
+        indexes = (
+            models.Index(fields=('scope_type', 'scope_id')),
+        )
         verbose_name = _('wireless LAN')
         verbose_name_plural = _('wireless LANs')
 
     def __str__(self):
         return self.ssid
 
-    def get_absolute_url(self):
-        return reverse('wireless:wirelesslan', args=[self.pk])
-
     def get_status_color(self):
         return WirelessLANStatusChoices.colors.get(self.status)
 
 
-def get_wireless_interface_types():
-    # Wrap choices in a callable to avoid generating dummy migrations
-    # when the choices are updated.
-    return {'type__in': WIRELESS_IFACE_TYPES}
-
-
-class WirelessLink(WirelessAuthenticationBase, PrimaryModel):
+class WirelessLink(WirelessAuthenticationBase, DistanceMixin, PrimaryModel):
     """
     A point-to-point connection between two wireless Interfaces.
     """
     interface_a = models.ForeignKey(
         to='dcim.Interface',
-        limit_choices_to=get_wireless_interface_types,
         on_delete=models.PROTECT,
         related_name='+',
         verbose_name=_('interface A'),
     )
     interface_b = models.ForeignKey(
         to='dcim.Interface',
-        limit_choices_to=get_wireless_interface_types,
         on_delete=models.PROTECT,
         related_name='+',
         verbose_name=_('interface B'),
@@ -202,30 +198,27 @@ class WirelessLink(WirelessAuthenticationBase, PrimaryModel):
     def __str__(self):
         return self.ssid or f'#{self.pk}'
 
-    def get_absolute_url(self):
-        return reverse('wireless:wirelesslink', args=[self.pk])
-
     def get_status_color(self):
         return LinkStatusChoices.colors.get(self.status)
 
     def clean(self):
+        super().clean()
 
         # Validate interface types
-        if self.interface_a.type not in WIRELESS_IFACE_TYPES:
+        if hasattr(self, "interface_a") and self.interface_a.type not in WIRELESS_IFACE_TYPES:
             raise ValidationError({
                 'interface_a': _(
-                    "{type_display} is not a wireless interface."
-                ).format(type_display=self.interface_a.get_type_display())
+                    "{type} is not a wireless interface."
+                ).format(type=self.interface_a.get_type_display())
             })
-        if self.interface_b.type not in WIRELESS_IFACE_TYPES:
+        if hasattr(self, "interface_b") and self.interface_b.type not in WIRELESS_IFACE_TYPES:
             raise ValidationError({
-                'interface_a': _(
-                    "{type_display} is not a wireless interface."
-                ).format(type_display=self.interface_b.get_type_display())
+                'interface_b': _(
+                    "{type} is not a wireless interface."
+                ).format(type=self.interface_b.get_type_display())
             })
 
     def save(self, *args, **kwargs):
-
         # Store the parent Device for the A and B interfaces
         self._interface_a_device = self.interface_a.device
         self._interface_b_device = self.interface_b.device

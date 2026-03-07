@@ -1,38 +1,56 @@
-from django.contrib.auth import get_user_model
-from django.contrib.auth.models import Group
-from graphene_django import DjangoObjectType
 
-from users import filtersets
-from utilities.querysets import RestrictedQuerySet
+import strawberry_django
+
+from netbox.graphql.types import BaseObjectType
+from users.models import Group, Owner, OwnerGroup, User
+
+from .filters import *
 
 __all__ = (
     'GroupType',
+    'OwnerGroupType',
+    'OwnerType',
     'UserType',
 )
 
 
-class GroupType(DjangoObjectType):
-
-    class Meta:
-        model = Group
-        fields = ('id', 'name')
-        filterset_class = filtersets.GroupFilterSet
-
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return RestrictedQuerySet(model=Group).restrict(info.context.user, 'view')
+@strawberry_django.type(
+    Group,
+    fields=['id', 'name'],
+    filters=GroupFilter,
+    pagination=True
+)
+class GroupType(BaseObjectType):
+    pass
 
 
-class UserType(DjangoObjectType):
+@strawberry_django.type(
+    User,
+    fields=[
+        'id', 'username', 'first_name', 'last_name', 'email', 'is_active', 'date_joined', 'groups',
+    ],
+    filters=UserFilter,
+    pagination=True
+)
+class UserType(BaseObjectType):
+    groups: list[GroupType]
 
-    class Meta:
-        model = get_user_model()
-        fields = (
-            'id', 'username', 'password', 'first_name', 'last_name', 'email', 'is_staff', 'is_active', 'date_joined',
-            'groups',
-        )
-        filterset_class = filtersets.UserFilterSet
 
-    @classmethod
-    def get_queryset(cls, queryset, info):
-        return RestrictedQuerySet(model=get_user_model()).restrict(info.context.user, 'view')
+@strawberry_django.type(
+    OwnerGroup,
+    fields=['id', 'name', 'description'],
+    filters=OwnerGroupFilter,
+    pagination=True
+)
+class OwnerGroupType(BaseObjectType):
+    pass
+
+
+@strawberry_django.type(
+    Owner,
+    fields=['id', 'group', 'name', 'description', 'user_groups', 'users'],
+    filters=OwnerFilter,
+    pagination=True
+)
+class OwnerType(BaseObjectType):
+    group: OwnerGroupType | None
